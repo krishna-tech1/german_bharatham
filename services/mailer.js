@@ -1,45 +1,69 @@
 const nodemailer = require("nodemailer");
 const axios = require("axios");
 
-const transientNetworkErrorCodes = new Set([
-  "ETIMEDOUT",
-  "ECONNRESET",
-  "ECONNREFUSED",
-  "EHOSTUNREACH",
-  "ENETUNREACH",
-]);
+// ─── Brevo (Sendinblue) HTTP API ─────────────────────────────────────────────
+// Uses HTTPS port 443 — works on Railway (SMTP ports 25/465/587 are blocked).
+// Get your API key: Brevo Dashboard → SMTP & API → API Keys → Create a new API key
+// Set env var: BREVO_API_KEY=xkeysib-...
+async function sendViaBrevo({ to, subject, text, html, from }) {
+  const apiKey = String(process.env.BREVO_API_KEY || "").trim();
+  if (!apiKey) {
+    const err = new Error("BREVO_API_KEY is not configured");
+    err.code = "BREVO_NOT_CONFIGURED";
+    throw err;
+  }
 
-function buildTransport({ host, port, secure, user, pass }) {
-  return nodemailer.createTransport({
-    host,
-    port,
-    secure,
-    auth: user && pass ? { user, pass } : undefined,
+  // Sender — use BREVO_FROM or fall back to SMTP_FROM env var
+  const fromRaw = String(process.env.BREVO_FROM || process.env.SMTP_FROM || from || "").trim();
+  if (!fromRaw) {
+    const err = new Error("Sender not configured. Set BREVO_FROM=Name <email@domain.com>");
+    err.code = "BREVO_FROM_NOT_CONFIGURED";
+    throw err;
+  }
 
-    // Fail fast on hosts that block outbound SMTP.
-    connectionTimeout: Number(process.env.SMTP_CONNECTION_TIMEOUT_MS || 10_000),
-    greetingTimeout: Number(process.env.SMTP_GREETING_TIMEOUT_MS || 10_000),
-    socketTimeout: Number(process.env.SMTP_SOCKET_TIMEOUT_MS || 20_000),
+  // Parse "Name <email>" or plain "email"
+  const nameMatch = fromRaw.match(/^(.+?)\s*<(.+?)>$/);
+  const senderName  = nameMatch ? nameMatch[1].trim() : "German Bharatham";
+  const senderEmail = nameMatch ? nameMatch[2].trim() : fromRaw;
 
-    // STARTTLS is expected on ports like 587/2525.
-    requireTLS: !secure,
+  const payload = {
+    sender: { name: senderName, email: senderEmail },
+    to: (Array.isArray(to) ? to : [to]).map((e) => ({ email: e })),
+    subject,
+    ...(text ? { textContent: text } : {}),
+    ...(html ? { htmlContent: html } : {}),
+  };
 
-    tls: {
-      minVersion: "TLSv1.2",
-      rejectUnauthorized:
-        String(process.env.SMTP_TLS_REJECT_UNAUTHORIZED || "true")
-          .trim()
-          .toLowerCase() !== "false",
-    },
-  });
+  try {
+    const resp = await axios.post("https://api.brevo.com/v3/smtp/email", payload, {
+      headers: {
+        "api-key": apiKey,
+        "Content-Type": "application/json",
+      },
+      timeout: Number(process.env.EMAIL_HTTP_TIMEOUT_MS || 15_000),
+    });
+
+    return {
+      messageId: resp?.data?.messageId,
+      accepted: Array.isArray(to) ? to : [to],
+      rejected: [],
+      provider: "brevo",
+    };
+  } catch (err) {
+    const status = err?.response?.status;
+    const data   = err?.response?.data;
+    const e = new Error(
+      `Brevo API request failed${status ? ` (HTTP ${status})` : ""}: ${JSON.stringify(data)}`
+    );
+    e.code    = "BREVO_REQUEST_FAILED";
+    e.status  = status;
+    e.details = data;
+    e.cause   = err;
+    throw e;
+  }
 }
 
-function emailProvider() {
-  return String(process.env.EMAIL_PROVIDER || "")
-    .trim()
-    .toLowerCase();
-}
-
+// ─── Resend HTTP API ──────────────────────────────────────────────────────────
 async function sendViaResend({ to, subject, text, html, from }) {
   const apiKey = String(process.env.RESEND_API_KEY || "").trim();
   if (!apiKey) {
@@ -50,9 +74,7 @@ async function sendViaResend({ to, subject, text, html, from }) {
 
   const resolvedFrom = String(process.env.RESEND_FROM || from || "").trim();
   if (!resolvedFrom) {
-    const err = new Error(
-      "Sender is not configured. Set RESEND_FROM (or SMTP_FROM/SMTP_USER)."
-    );
+    const err = new Error("Sender not configured. Set RESEND_FROM=Name <email@yourdomain.com>");
     err.code = "RESEND_FROM_NOT_CONFIGURED";
     throw err;
   }
@@ -74,7 +96,6 @@ async function sendViaResend({ to, subject, text, html, from }) {
       timeout: Number(process.env.EMAIL_HTTP_TIMEOUT_MS || 15_000),
     });
 
-    // Normalize return shape (nodemailer returns { messageId, accepted, ... }).
     return {
       messageId: resp?.data?.id,
       accepted: payload.to,
@@ -82,57 +103,68 @@ async function sendViaResend({ to, subject, text, html, from }) {
       provider: "resend",
     };
   } catch (err) {
-    // Bubble up a compact error but keep original details available.
     const status = err?.response?.status;
-    const data = err?.response?.data;
+    const data   = err?.response?.data;
     const e = new Error(
       `Resend API request failed${status ? ` (HTTP ${status})` : ""}`
     );
-    e.code = "RESEND_REQUEST_FAILED";
-    e.status = status;
+    e.code    = "RESEND_REQUEST_FAILED";
+    e.status  = status;
     e.details = data;
-    e.cause = err;
+    e.cause   = err;
     throw e;
   }
 }
 
+// ─── SMTP (nodemailer) ────────────────────────────────────────────────────────
+// ⚠️  Railway blocks outbound SMTP ports (25, 465, 587). Use Brevo or Resend.
+const transientNetworkErrorCodes = new Set([
+  "ETIMEDOUT", "ECONNRESET", "ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH",
+]);
+
+function buildTransport({ host, port, secure, user, pass }) {
+  return nodemailer.createTransport({
+    host,
+    port,
+    secure,
+    auth: user && pass ? { user, pass } : undefined,
+    connectionTimeout: Number(process.env.SMTP_CONNECTION_TIMEOUT_MS || 10_000),
+    greetingTimeout:   Number(process.env.SMTP_GREETING_TIMEOUT_MS   || 10_000),
+    socketTimeout:     Number(process.env.SMTP_SOCKET_TIMEOUT_MS     || 20_000),
+    requireTLS: !secure,
+    tls: {
+      minVersion: "TLSv1.2",
+      rejectUnauthorized:
+        String(process.env.SMTP_TLS_REJECT_UNAUTHORIZED || "true")
+          .trim()
+          .toLowerCase() !== "false",
+    },
+  });
+}
+
 function smtpConfig() {
-  const host = String(process.env.SMTP_HOST || "smtp.gmail.com").trim();
-  const port = Number(process.env.SMTP_PORT || 587);
+  const host     = String(process.env.SMTP_HOST   || "smtp.gmail.com").trim();
+  const port     = Number(process.env.SMTP_PORT   || 587);
   const secureEnv = String(process.env.SMTP_SECURE || "").trim();
-  const secure = secureEnv ? secureEnv.toLowerCase() === "true" : port === 465;
-
-  const user = String(process.env.SMTP_USER || "").trim();
-  let pass = String(process.env.SMTP_PASS || "").trim();
-  // Gmail app passwords are often displayed with spaces; authentication expects no spaces.
-  if (/^smtp\.gmail\.com$/i.test(host)) {
-    pass = pass.replace(/\s+/g, "");
-  }
-  const from = String(process.env.SMTP_FROM || user).trim();
-
+  const secure   = secureEnv ? secureEnv.toLowerCase() === "true" : port === 465;
+  const user     = String(process.env.SMTP_USER   || "").trim();
+  let   pass     = String(process.env.SMTP_PASS   || "").trim();
+  if (/^smtp\.gmail\.com$/i.test(host)) pass = pass.replace(/\s+/g, "");
+  const from     = String(process.env.SMTP_FROM   || user).trim();
   return { host, port, secure, user, pass, from };
 }
 
-async function sendEmail({ to, subject, text, html }) {
+async function sendViaSmtp({ to, subject, text, html }) {
   const cfg = smtpConfig();
-  const provider = emailProvider();
-  const hasResend = Boolean(String(process.env.RESEND_API_KEY || "").trim());
-
-  // Prefer HTTP-based provider in production unless explicitly forced to SMTP.
-  if (provider === "resend" || (!provider && hasResend)) {
-    return sendViaResend({ to, subject, text, html, from: cfg.from });
-  }
-
   if (!cfg.user || !cfg.pass) {
     const err = new Error(
-      "Email is not configured. Set RESEND_API_KEY/RESEND_FROM (recommended) or SMTP_USER/SMTP_PASS (and optionally SMTP_HOST/SMTP_PORT/SMTP_FROM)."
+      "SMTP not configured. Set SMTP_USER + SMTP_PASS, or use BREVO_API_KEY / RESEND_API_KEY instead."
     );
     err.code = "EMAIL_NOT_CONFIGURED";
     throw err;
   }
 
   const transporter = buildTransport(cfg);
-
   const mail = {
     from: cfg.from,
     to,
@@ -145,14 +177,11 @@ async function sendEmail({ to, subject, text, html }) {
     return await transporter.sendMail(mail);
   } catch (originalErr) {
     const code = originalErr && (originalErr.code || originalErr.errno);
-    const msg = String(originalErr && originalErr.message ? originalErr.message : "");
-    const isTransient =
-      transientNetworkErrorCodes.has(String(code)) || /timeout/i.test(msg);
-
+    const msg  = String(originalErr?.message || "");
+    const isTransient = transientNetworkErrorCodes.has(String(code)) || /timeout/i.test(msg);
     if (!isTransient) throw originalErr;
 
-    // Brevo supports 587 (STARTTLS), 2525 (STARTTLS), and 465 (SSL).
-    // Some hosts block certain SMTP ports; try a sensible fallback sequence.
+    // Try alternate SMTP ports (some hosts block 587 but allow 2525, etc.)
     const portsToTry = [];
     if (cfg.port === 465) portsToTry.push(587, 2525);
     else if (cfg.port === 587) portsToTry.push(2525);
@@ -161,20 +190,38 @@ async function sendEmail({ to, subject, text, html }) {
     let lastErr = originalErr;
     for (const nextPort of portsToTry) {
       try {
-        const nextCfg = {
-          ...cfg,
-          port: nextPort,
-          secure: nextPort === 465,
-        };
-        const nextTransporter = buildTransport(nextCfg);
-        return await nextTransporter.sendMail({ ...mail, from: nextCfg.from });
+        const nextCfg = { ...cfg, port: nextPort, secure: nextPort === 465 };
+        return await buildTransport(nextCfg).sendMail({ ...mail, from: nextCfg.from });
       } catch (e) {
         lastErr = e;
       }
     }
-
     throw lastErr;
   }
+}
+
+// ─── Main sendEmail — provider selection ─────────────────────────────────────
+// Priority:
+//   1. EMAIL_PROVIDER=brevo  → Brevo HTTP API  (recommended for Railway)
+//   2. EMAIL_PROVIDER=resend → Resend HTTP API
+//   3. BREVO_API_KEY set     → auto-use Brevo HTTP API
+//   4. RESEND_API_KEY set    → auto-use Resend HTTP API
+//   5. SMTP fallback         → only works outside Railway
+async function sendEmail({ to, subject, text, html }) {
+  const cfg      = smtpConfig();
+  const provider = String(process.env.EMAIL_PROVIDER || "").trim().toLowerCase();
+  const hasBrevo  = Boolean(String(process.env.BREVO_API_KEY  || "").trim());
+  const hasResend = Boolean(String(process.env.RESEND_API_KEY || "").trim());
+
+  if (provider === "brevo"  || (!provider && hasBrevo))  {
+    return sendViaBrevo({ to, subject, text, html, from: cfg.from });
+  }
+  if (provider === "resend" || (!provider && hasResend)) {
+    return sendViaResend({ to, subject, text, html, from: cfg.from });
+  }
+
+  // SMTP — ⚠️ will fail on Railway (ports blocked)
+  return sendViaSmtp({ to, subject, text, html });
 }
 
 module.exports = { sendEmail };
