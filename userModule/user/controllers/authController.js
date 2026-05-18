@@ -262,19 +262,23 @@ exports.register = async (req, res) => {
   console.log(`🚀 [START] register called at ${new Date().toISOString()}`);
   try {
     const { name, email, phone, password } = req.body;
-    console.log(`🔍 [DB QUERY] checking for existing user with email: ${email}`);
+    if (!email) {
+      return res.status(400).json({ message: 'Email is required.' });
+    }
+    const cleanEmail = email.toLowerCase().trim();
+    console.log(`🔍 [DB QUERY] checking for existing user with email: ${cleanEmail}`);
     const queryStart = Date.now();
     // Only check if user already exists
-    const existingUser = await User.findOne({ email });
+    const existingUser = await User.findOne({ email: cleanEmail });
     console.log(`✅ [DB RESULT] findOne returned ${existingUser ? 1 : 0} documents in ${Date.now() - queryStart}ms`);
     if (existingUser)
       return res.status(400).json({ message: "User already exists" });
     const hashedPassword = await bcrypt.hash(password, 10);
-    console.log(`🔍 [DB QUERY] creating new user with email: ${email}`);
+    console.log(`🔍 [DB QUERY] creating new user with email: ${cleanEmail}`);
     const createStart = Date.now();
     const user = await User.create({
       name,
-      email,
+      email: cleanEmail,
       phone,
       password: hashedPassword,
       role: "user",
@@ -303,15 +307,25 @@ exports.sendVerificationCode = async (req, res) => {
       return res.status(400).json({ message: 'Email is required.' });
     }
 
+    const cleanEmail = email.toLowerCase().trim();
+
+    // Check if user already exists
+    console.log(`🔍 [DB QUERY] checking if user already exists with email: ${cleanEmail}`);
+    const existingUser = await User.findOne({ email: cleanEmail });
+    if (existingUser) {
+      console.log(`⚠️ [DUPLICATE EMAIL] User already exists with email: ${cleanEmail}`);
+      return res.status(400).json({ message: 'User already exists' });
+    }
+
     // Generate a 6-digit code
     const code = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
     // Upsert the verification code to DB first (fast)
-    console.log(`🔍 [DB QUERY] upserting verification code for email: ${email}`);
+    console.log(`🔍 [DB QUERY] upserting verification code for email: ${cleanEmail}`);
     const upsertStart = Date.now();
     await EmailVerification.findOneAndUpdate(
-      { email: email.toLowerCase().trim() },
+      { email: cleanEmail },
       { code, expiresAt },
       { upsert: true, new: true }
     );
