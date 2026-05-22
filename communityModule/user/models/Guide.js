@@ -24,4 +24,6 @@ const guideSchema = new mongoose.Schema(
   }
 );
 
-module.exports = mongoose.model("Community", guideSchema);
+module.exports =
+  mongoose.models.Community ||
+  mongoose.model("Community", guideSchema);
