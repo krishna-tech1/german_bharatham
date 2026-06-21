@@ -72,6 +72,9 @@ const accommodationSchema = new mongoose.Schema(
     propertyType: { type: String, trim: true },
 
     city: { type: String, trim: true },
+    postalCode:   { type: String, trim: true },
+    area:         { type: String, trim: true },
+    address:      { type: String, trim: true },
 
     rentDetails:       { type: rentDetailsSchema,       default: () => ({}) },
     propertyDetails:   { type: propertyDetailsSchema,   default: () => ({}) },
