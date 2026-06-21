@@ -38,6 +38,8 @@ const jobSchema = new mongoose.Schema(
     },
     featured: { type: Boolean, default: false },
     expiresAt: { type: Date },
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    creatorType: { type: String, enum: ["admin", "user"], default: "admin" },
   },
   { 
     timestamps: true,
