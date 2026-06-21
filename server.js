@@ -83,6 +83,11 @@ app.use(
   protect,
   require("./subscriptionModule/user")
 );
+app.use(
+  "/api/user/listings",
+  protect,
+  require("./routes/userListingsRoutes")
+);
 // ── Universal Rating Module ─────────────────────────────────────────────────
 app.use("/api/ratings", require("./routes/ratingRoutes"));
 

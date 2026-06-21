@@ -37,9 +37,11 @@ const foodGrocerySchema = new mongoose.Schema(
       5: { type: Number, default: 0 }
     },
     lastRatedAt: { type: Date },
-    status: { type: String, enum: ['Active', 'Pending', 'Inactive'], default: 'Pending' },
+    status: { type: String, enum: ['Active', 'Pending', 'Inactive', 'Rejected'], default: 'Pending' },
     featured: { type: Boolean, default: false },
     verified: { type: Boolean, default: false },
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    creatorType: { type: String, enum: ["admin", "user"], default: "admin" },
   },
   { 
     timestamps: true,
@@ -52,6 +54,7 @@ foodGrocerySchema.pre('validate', function() {
     const raw = String(this.status).trim().toLowerCase();
     if (raw === 'active') this.status = 'Active';
     else if (raw === 'pending') this.status = 'Pending';
+    else if (raw === 'rejected') this.status = 'Rejected';
     else if (raw === 'inactive' || raw === 'disabled') this.status = 'Inactive';
   }
 });

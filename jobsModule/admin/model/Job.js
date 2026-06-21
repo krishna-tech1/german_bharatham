@@ -33,7 +33,7 @@ const jobSchema = new mongoose.Schema(
     lastRatedAt: { type: Date },
     status: {
       type: String,
-      enum: ['Active', 'Pending', 'Inactive', 'active', 'pending', 'inactive', 'disabled'],
+      enum: ['Active', 'Pending', 'Inactive', 'Rejected', 'active', 'pending', 'inactive', 'disabled', 'rejected'],
       default: 'Pending',
     },
     featured: { type: Boolean, default: false },
@@ -50,6 +50,7 @@ jobSchema.pre('validate', function() {
     const raw = String(this.status).trim().toLowerCase();
     if (raw === 'active') this.status = 'Active';
     else if (raw === 'pending') this.status = 'Pending';
+    else if (raw === 'rejected') this.status = 'Rejected';
     else if (raw === 'inactive' || raw === 'disabled') this.status = 'Inactive';
   }
 });

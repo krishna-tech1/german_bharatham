@@ -32,6 +32,8 @@ const jobSchema = new mongoose.Schema(
       default: "Active",
     },
     amenities: [String],
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    creatorType: { type: String, enum: ["admin", "user"], default: "admin" },
   },
   { timestamps: true }
 );

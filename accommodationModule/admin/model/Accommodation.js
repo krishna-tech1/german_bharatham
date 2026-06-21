@@ -36,8 +36,10 @@ const accommodationSchema = new mongoose.Schema(
       5: { type: Number, default: 0 }
     },
     lastRatedAt: { type: Date },
-    status: { type: String, enum: ['Active', 'Pending', 'Inactive'], default: 'Pending' },
+    status: { type: String, enum: ['Active', 'Pending', 'Inactive', 'Rejected'], default: 'Pending' },
     featured: { type: Boolean, default: false },
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    creatorType: { type: String, enum: ["admin", "user"], default: "admin" },
   },
   { 
     timestamps: true,

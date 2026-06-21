@@ -57,9 +57,11 @@ const serviceSchema = new mongoose.Schema(
         "Active",
         "Pending",
         "Inactive",
+        "Rejected",
         "active",
         "disabled",
         "pending",
+        "rejected",
       ],
       default: "Active",
     },
@@ -67,6 +69,8 @@ const serviceSchema = new mongoose.Schema(
     // Existing flags (kept for backward compatibility)
     featured: { type: Boolean, default: false },
     verified: { type: Boolean, default: false },
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    creatorType: { type: String, enum: ["admin", "user"], default: "admin" },
   },
   {
     timestamps: true,
@@ -118,6 +122,14 @@ serviceSchema.pre("validate", function syncServiceFields() {
   }
 
   // Active/status
+  if (this.status != null) {
+    const raw = String(this.status).trim().toLowerCase();
+    if (raw === 'active') this.status = 'Active';
+    else if (raw === 'pending') this.status = 'Pending';
+    else if (raw === 'rejected') this.status = 'Rejected';
+    else if (raw === 'inactive' || raw === 'disabled') this.status = 'Inactive';
+  }
+
   if (this.isActive === undefined || this.isActive === null) {
     const s = String(this.status || "").toLowerCase();
     this.isActive = s === "active";

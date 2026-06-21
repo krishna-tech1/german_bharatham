@@ -7,6 +7,7 @@ const Accommodation = require("../../accommodationModule/admin/model/Accommodati
 const FoodGrocery = require("../../foodGroceryModule/admin/model/FoodGrocery");
 const Job = require("../../jobsModule/admin/model/Job");
 const Service = require("../../servicesModule/admin/model/Service");
+const User = require("../../userModule/user/models/User");
 
 // Login
 router.post("/login", (req, res, next) => {
@@ -23,10 +24,10 @@ router.get("/category-stats", protect, adminOnly, getCategoryStats);
 router.get("/all-listings", protect, adminOnly, async (req, res) => {
   try {
     const [accommodations, foods, jobs, services] = await Promise.all([
-      Accommodation.find().select("title location city area status createdAt").limit(100).lean(),
-      FoodGrocery.find().select("title location city area status createdAt").limit(100).lean(),
-      Job.find().select("title location city area status createdAt").limit(100).lean(),
-      Service.find().select("serviceName title location city area status createdAt").limit(100).lean(),
+      Accommodation.find().select("title location city area status createdAt creatorType createdBy").populate("createdBy", "name email").limit(100).lean(),
+      FoodGrocery.find().select("title location city area status createdAt creatorType createdBy").populate("createdBy", "name email").limit(100).lean(),
+      Job.find().select("title location city area status createdAt creatorType createdBy").populate("createdBy", "name email").limit(100).lean(),
+      Service.find().select("serviceName title location city area status createdAt creatorType createdBy").populate("createdBy", "name email").limit(100).lean(),
     ]);
     res.json({
       Accommodation: accommodations,
@@ -44,10 +45,10 @@ router.get("/all-listings", protect, adminOnly, async (req, res) => {
 router.get("/pending-listings", protect, adminOnly, async (req, res) => {
   try {
     const [accommodations, foods, jobs, services] = await Promise.all([
-      Accommodation.find({ status: { $regex: /^pending$/i } }).select("title location city area status createdAt contactPhone images media amenities description").limit(50).lean(),
-      FoodGrocery.find({ status: { $regex: /^pending$/i } }).select("title location city area status createdAt phone images media amenities description").limit(50).lean(),
-      Job.find({ status: { $regex: /^pending$/i } }).select("title location city area status createdAt companyLogo email description").limit(50).lean(),
-      Service.find({ status: { $regex: /^pending$/i } }).select("serviceName title location city area status createdAt phone images media amenities description").limit(50).lean(),
+      Accommodation.find({ status: { $regex: /^pending$/i } }).select("title location city area status createdAt contactPhone images media amenities description creatorType createdBy").populate("createdBy", "name").limit(50).lean(),
+      FoodGrocery.find({ status: { $regex: /^pending$/i } }).select("title location city area status createdAt phone images media amenities description creatorType createdBy").populate("createdBy", "name").limit(50).lean(),
+      Job.find({ status: { $regex: /^pending$/i } }).select("title location city area status createdAt companyLogo email description creatorType createdBy").populate("createdBy", "name").limit(50).lean(),
+      Service.find({ status: { $regex: /^pending$/i } }).select("serviceName title location city area status createdAt phone images media amenities description creatorType createdBy").populate("createdBy", "name").limit(50).lean(),
     ]);
     res.json({
       Accommodation: accommodations,
