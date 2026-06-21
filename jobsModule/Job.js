@@ -16,7 +16,9 @@ const jobSchema = new mongoose.Schema(
       default: 'Full-time'
     },
     skills: { type: [String], default: [] },
-    status: { type: String, enum: ['active', 'disabled', 'pending'], default: 'active' }
+    status: { type: String, enum: ['active', 'disabled', 'pending'], default: 'active' },
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    creatorType: { type: String, enum: ["admin", "user"], default: "admin" }
   },
   { timestamps: true }
 );

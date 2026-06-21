@@ -82,6 +82,8 @@ const accommodationSchema = new mongoose.Schema(
 
     contactPhone: { type: String, trim: true },
     status: { type: String, enum: ['Active', 'Pending', 'Inactive', 'active', 'disabled', 'pending'], default: 'Pending' },
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    creatorType: { type: String, enum: ["admin", "user"], default: "admin" },
 
     // Geocoded coordinates (auto-populated from city on save)
     latitude:  { type: Number },
