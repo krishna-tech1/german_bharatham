@@ -145,7 +145,7 @@ router.post('/', adminCheck, async (req, res) => {
         status: 'pending',
         featured: req.body.featured === true,
         verified: req.body.verified === true,
-        createdById: req.user ? req.user.id : null,
+        createdById: req.user ? parseInt(req.user.id, 10) : null,
         creatorType: req.body.creatorType || "admin",
       }
     });

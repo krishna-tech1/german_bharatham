@@ -127,8 +127,7 @@ router.post('/', adminCheck, async (req, res) => {
         applyUrl: req.body.applyUrl,
         status: req.body.status,
         amenities: req.body.amenities || [],
-        creatorType: req.body.creatorType || 'admin',
-        createdById: req.user ? req.user.id : null,
+        createdById: req.user ? parseInt(req.user.id, 10) : null,
       }
     });
     

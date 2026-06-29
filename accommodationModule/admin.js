@@ -165,8 +165,7 @@ router.post("/", adminCheck, async (req, res) => {
         ratingDistribution: req.body.ratingDistribution || {},
         lastRatedAt: null,
         status: 'pending',
-        featured: req.body.featured === true,
-        createdById: req.user ? req.user.id : null,
+        createdById: req.user ? parseInt(req.user.id, 10) : null,
         creatorType: req.body.creatorType || "admin",
         
         // JSON configurations
