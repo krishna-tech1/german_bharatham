@@ -55,28 +55,25 @@ exports.getDashboardStats = async (req, res) => {
       pendingAccommodations,
       pendingFood,
       pendingJobs,
-      pendingServices,
-      pendingCustomListings
+      pendingServices
     ] = await Promise.all([
       prisma.accommodation.count({ where: pendingFilter }),
       prisma.foodGrocery.count({ where: pendingFilter }),
       prisma.jobListing.count({ where: pendingFilter }),
-      prisma.service.count({ where: pendingFilter }),
-      prisma.genericListing.count({ where: pendingFilter })
+      prisma.service.count({ where: pendingFilter })
     ]);
 
-    const totalPending = pendingAccommodations + pendingFood + pendingJobs + pendingServices + pendingCustomListings;
+    const totalPending = pendingAccommodations + pendingFood + pendingJobs + pendingServices;
     console.log(`✅ [DB RESULT] counted pending documents in ${Date.now() - pendingStart}ms, total pending: ${totalPending}`);
 
     // Get recent listings
     console.log(`🔍 [DB QUERY] fetching recent listings from all collections`);
     const recentStart = Date.now();
-    const [recentAccommodations, recentFood, recentJobs, recentServices, recentCustomListings] = await Promise.all([
+    const [recentAccommodations, recentFood, recentJobs, recentServices] = await Promise.all([
       prisma.accommodation.findMany({ orderBy: { createdAt: 'desc' }, take: 2 }),
       prisma.foodGrocery.findMany({ orderBy: { createdAt: 'desc' }, take: 2 }),
       prisma.jobListing.findMany({ orderBy: { createdAt: 'desc' }, take: 2 }),
-      prisma.service.findMany({ orderBy: { createdAt: 'desc' }, take: 2 }),
-      prisma.genericListing.findMany({ orderBy: { createdAt: 'desc' }, take: 4 })
+      prisma.service.findMany({ orderBy: { createdAt: 'desc' }, take: 2 })
     ]);
     console.log(`✅ [DB RESULT] fetched recent listings in ${Date.now() - recentStart}ms`);
 
@@ -106,13 +103,6 @@ exports.getDashboardStats = async (req, res) => {
       ...recentServices.map(item => ({
         title: item.title || item.serviceName || 'Untitled',
         category: 'Services',
-        status: item.status || 'Active',
-        createdAt: item.createdAt,
-        added: formatTimeAgo(item.createdAt)
-      })),
-      ...recentCustomListings.map(item => ({
-        title: item.title || 'Untitled',
-        category: item.categoryName || 'Custom',
         status: item.status || 'Active',
         createdAt: item.createdAt,
         added: formatTimeAgo(item.createdAt)
