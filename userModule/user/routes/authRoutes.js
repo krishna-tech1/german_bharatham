@@ -15,7 +15,7 @@ router.post("/forgot-password", controller.forgotPassword);
 router.post("/reset-password", controller.resetPassword);
 router.post("/forgot-password-otp", controller.forgotPasswordOtp);
 router.post("/reset-password-otp", controller.resetPasswordOtp);
-router.post("/verify-email", controller.verifyEmail);
+router.post("/verify-email", controller.verifyEmailCode);
 router.get("/profile", protect, controller.getProfile);
 router.put("/profile", protect, controller.updateProfile);
 router.put("/change-password", protect, controller.changePassword);

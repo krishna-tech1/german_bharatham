@@ -373,10 +373,11 @@ exports.verifyEmailCode = async (req, res) => {
     console.log(`📤 [RESPONSE] sending 200 response after ${Date.now() - start}ms`);
     res.status(200).json({ message: 'Email verified successfully.' });
   } catch (error) {
-    console.error(`❌ [ERROR] verifyEmailCode failed: ${error.message} after ${Date.now() - start}ms`);
     res.status(500).json({ message: error.message });
   }
 };
+
+exports.verifyEmail = exports.verifyEmailCode;
 
 // GET PROFILE
 exports.getProfile = async (req, res) => {
