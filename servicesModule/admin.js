@@ -167,35 +167,42 @@ router.put('/:id', adminCheck, async (req, res) => {
     const numericId = parseInt(req.params.id);
     if (isNaN(numericId)) return res.status(400).json({ message: "Invalid ID format" });
 
-    const hasAmenitiesUpdate = Object.prototype.hasOwnProperty.call(req.body, 'amenities') ||
-      Object.prototype.hasOwnProperty.call(req.body, 'amenitiesText');
+    const b = req.body;
 
-    const updateData = {
-      ...req.body
-    };
-
-    // Remove client side MongoDB _id if present to prevent validation issues
-    delete updateData._id;
-    delete updateData.id;
-
-    if (hasAmenitiesUpdate) {
-      const rawAmenities = req.body.amenities ?? req.body.amenitiesText ?? '';
-      const amenities = Array.isArray(rawAmenities)
-        ? rawAmenities.map((s) => (s ?? '').toString().trim()).filter(Boolean)
-        : rawAmenities.toString().split(/[,;\n]/).map((s) => s.trim()).filter(Boolean);
-
+    // Build amenities array from amenities array or amenitiesText string
+    let amenities;
+    if (b.amenities !== undefined || b.amenitiesText !== undefined) {
+      const raw = b.amenities ?? b.amenitiesText ?? '';
+      amenities = Array.isArray(raw)
+        ? raw.map(s => (s ?? '').toString().trim()).filter(Boolean)
+        : raw.toString().split(/[,;\n]/).map(s => s.trim()).filter(Boolean);
       if (amenities.length === 0) {
         return res.status(400).json({ message: 'Services Offered is required' });
       }
-
-      updateData.amenities = amenities;
-      delete updateData.amenitiesText;
     }
 
-    if (req.body.rating) updateData.rating = parseFloat(req.body.rating);
-    if (req.body.ratingCount) updateData.ratingCount = parseInt(req.body.ratingCount, 10);
-    if (req.body.averageRating) updateData.averageRating = parseFloat(req.body.averageRating);
-    if (req.body.totalRatings) updateData.totalRatings = parseInt(req.body.totalRatings, 10);
+    // Whitelist only known Service Prisma schema fields
+    const updateData = {};
+    if (b.title        != null) updateData.title        = String(b.title).trim() || null;
+    if (b.serviceName  != null) updateData.serviceName  = String(b.serviceName).trim() || null;
+    if (b.providerName != null) updateData.providerName = String(b.providerName).trim() || null;
+    if (b.serviceType  != null) updateData.serviceType  = String(b.serviceType).trim() || null;
+    if (b.description  != null) updateData.description  = String(b.description).trim() || null;
+    if (b.city         != null) updateData.city         = String(b.city).trim() || null;
+    if (b.area         != null) updateData.area         = String(b.area).trim() || null;
+    if (b.address      != null) updateData.address      = String(b.address).trim() || null;
+    if (b.postalCode   != null) updateData.postalCode   = String(b.postalCode).trim() || null;
+    if (b.priceRange   != null) updateData.priceRange   = String(b.priceRange).trim() || null;
+    if (b.website      != null) updateData.website      = String(b.website).trim() || null;
+    if (b.whatsapp     != null) updateData.whatsapp     = String(b.whatsapp).trim() || null;
+    if (b.status       != null) updateData.status       = b.status;
+    if (b.featured     != null) updateData.featured     = !!b.featured;
+    if (b.verified     != null) updateData.verified     = !!b.verified;
+    if (b.contactPhone || b.phone) {
+      updateData.contactPhone = String(b.contactPhone || b.phone).trim() || null;
+      updateData.phone        = String(b.contactPhone || b.phone).trim() || null;
+    }
+    if (amenities !== undefined) updateData.amenities = amenities;
 
     console.log(`🔍 [DB QUERY] Updating Service with ID: ${numericId}`);
     const updateStart = Date.now();
@@ -204,7 +211,7 @@ router.put('/:id', adminCheck, async (req, res) => {
       data: updateData
     });
     console.log(`✅ [DB RESULT] Update completed in ${Date.now() - updateStart}ms`);
-    
+
     console.log(`📤 [RESPONSE] Sending 200 response after ${Date.now() - start}ms`);
     res.json(mapService(doc));
   } catch (e) {

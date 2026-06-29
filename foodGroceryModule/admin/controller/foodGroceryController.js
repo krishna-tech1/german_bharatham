@@ -183,19 +183,41 @@ exports.updateFoodGrocery = async (req, res) => {
     const numericId = parseInt(req.params.id);
     if (isNaN(numericId)) return res.status(400).json({ message: "Invalid ID format" });
 
-    // Remove client side MongoDB _id if present to prevent validation issues
-    const updateData = {
-      ...req.body
-    };
-    delete updateData._id;
-    delete updateData.id;
+    const b = req.body;
 
-    if (req.body.city || req.body.address) {
-      updateData.location = `${req.body.city || ''}, ${req.body.address || ''}`.trim();
+    // Whitelist only known FoodGrocery Prisma schema fields
+    const updateData = {};
+    if (b.title       != null) updateData.title       = String(b.title || b.name || '').trim() || null;
+    if (b.name        != null) updateData.title       = String(b.name  || b.title || '').trim() || null;
+    if (b.subCategory != null) updateData.subCategory = String(b.subCategory).trim() || null;
+    if (b.type        != null) updateData.type        = String(b.type).trim() || null;
+    if (b.address     != null) updateData.address     = String(b.address).trim() || null;
+    if (b.city        != null) updateData.city        = String(b.city).trim() || null;
+    if (b.state       != null) updateData.state       = String(b.state).trim() || null;
+    if (b.zipCode     != null) updateData.zipCode     = String(b.zipCode).trim() || null;
+    if (b.description != null) updateData.description = String(b.description).trim() || null;
+    if (b.openingHours!= null) updateData.openingHours= String(b.openingHours).trim() || null;
+    if (b.priceRange  != null) updateData.priceRange  = String(b.priceRange).trim() || null;
+    if (b.website     != null) updateData.website     = String(b.website).trim() || null;
+    if (b.status      != null) updateData.status      = b.status;
+    if (b.featured    != null) updateData.featured    = !!b.featured;
+    if (b.verified    != null) updateData.verified    = !!b.verified;
+    if (b.phone  != null) updateData.phone  = String(b.phone).trim() || null;
+    if (b.dineInAvailable  != null) updateData.dineInAvailable  = !!b.dineInAvailable;
+    if (b.deliveryAvailable!= null) updateData.deliveryAvailable= !!b.deliveryAvailable;
+    if (b.takeoutAvailable != null) updateData.takeoutAvailable = !!b.takeoutAvailable;
+    if (b.cateringAvailable!= null) updateData.cateringAvailable= !!b.cateringAvailable;
+
+    if (Array.isArray(b.cuisine))     updateData.cuisine     = b.cuisine.map(c => String(c));
+    if (Array.isArray(b.specialties)) updateData.specialties = b.specialties.map(s => String(s));
+
+    // Build location string from city/address
+    if (b.city || b.address) {
+      updateData.location = `${b.city || ''}, ${b.address || ''}`.trim().replace(/^,\s*/, '').replace(/,\s*$/, '');
     }
 
     // Re-geocode if city/address changed
-    const locationQuery = req.body.city || req.body.address;
+    const locationQuery = b.city || b.address;
     if (locationQuery) {
       console.log(`🌍 [GEOCODE] Re-geocoding location: ${locationQuery}`);
       const coords = await geocode(locationQuery);
@@ -205,7 +227,7 @@ exports.updateFoodGrocery = async (req, res) => {
         console.log(`✅ [GEOCODE RESULT] Got updated coordinates: ${coords.latitude}, ${coords.longitude}`);
       }
     }
-    
+
     console.log(`🔍 [DB QUERY] Updating FoodGrocery with ID: ${numericId}`);
     const updateStart = Date.now();
     const updated = await prisma.foodGrocery.update({
@@ -213,7 +235,7 @@ exports.updateFoodGrocery = async (req, res) => {
       data: updateData
     });
     console.log(`✅ [DB RESULT] Update completed in ${Date.now() - updateStart}ms`);
-    
+
     console.log(`📤 [RESPONSE] Sending 200 response after ${Date.now() - start}ms`);
     res.json(mapFoodGrocery(updated));
   } catch (err) {

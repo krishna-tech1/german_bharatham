@@ -257,38 +257,42 @@ router.put("/:id", adminCheck, async (req, res) => {
     if (isNaN(numericId)) return res.status(400).json({ message: "Invalid ID format" });
 
     console.log(`🔍 [DB QUERY] Updating Accommodation with ID: ${numericId}`);
-    
-    // Extract flat helper fields for SQL search/sort performance if they are present in req.body
-    const updateData = {
-      ...req.body
-    };
 
-    // Remove client side MongoDB _id if present to prevent prisma schema validation error
-    delete updateData._id;
-    delete updateData.id;
+    const b = req.body;
 
-    if (req.body.rentDetails) {
-      updateData.rent = req.body.rentDetails.coldRent ? parseFloat(req.body.rentDetails.coldRent) : null;
-      updateData.deposit = req.body.rentDetails.deposit ? parseFloat(req.body.rentDetails.deposit) : null;
+    // Build update safely — only whitelist known Prisma schema fields
+    const updateData = {};
+    if (b.title       != null) updateData.title       = String(b.title).trim();
+    if (b.city        != null) updateData.city         = String(b.city).trim();
+    if (b.address     != null) updateData.address      = String(b.address).trim() || null;
+    if (b.area        != null) updateData.area         = String(b.area).trim() || null;
+    if (b.state       != null) updateData.state        = String(b.state).trim() || null;
+    if (b.zipCode     != null) updateData.zipCode      = String(b.zipCode).trim() || null;
+    if (b.postalCode  != null) updateData.zipCode      = String(b.postalCode).trim() || null;
+    if (b.type        != null) updateData.type         = String(b.type).trim() || null;
+    if (b.description != null) updateData.description  = String(b.description).trim() || null;
+    if (b.status      != null) updateData.status       = b.status;
+    if (b.contactPhone || b.phone) {
+      updateData.contactPhone = String(b.contactPhone || b.phone).trim();
+      updateData.phone        = String(b.contactPhone || b.phone).trim();
     }
-    if (req.body.propertyDetails) {
-      updateData.bedrooms = req.body.propertyDetails.bedrooms ? parseInt(req.body.propertyDetails.bedrooms, 10) : null;
-      updateData.bathrooms = req.body.propertyDetails.bathrooms ? parseInt(req.body.propertyDetails.bathrooms, 10) : null;
-      updateData.area = req.body.propertyDetails.sizeSqm ? parseFloat(req.body.propertyDetails.sizeSqm) : null;
-    }
-    if (req.body.amenities) {
-      updateData.furnished = req.body.amenities.furnished === true;
-      updateData.petsAllowed = req.body.amenities.petsAllowed === true;
-      updateData.parkingAvailable = req.body.amenities.parking === true;
-    }
-    if (req.body.media && Array.isArray(req.body.media.images)) {
-      updateData.image = req.body.media.images.length > 0 ? req.body.media.images[0] : null;
-    }
-    if (req.body.contactPhone) {
-      updateData.phone = String(req.body.contactPhone).trim();
-    }
-    if (req.body.latitude) updateData.latitude = parseFloat(req.body.latitude);
-    if (req.body.longitude) updateData.longitude = parseFloat(req.body.longitude);
+
+    // Nested JSON fields — store as-is (Prisma Json type)
+    if (b.rentDetails)      updateData.rentDetails      = b.rentDetails;
+    if (b.propertyDetails)  updateData.propertyDetails  = b.propertyDetails;
+    if (b.amenities)        updateData.amenities        = b.amenities;
+    if (b.media)            updateData.media            = b.media;
+    if (b.adminControls)    updateData.adminControls    = b.adminControls;
+
+    // Flat derived fields from nested
+    if (b.rentDetails?.coldRent != null)      updateData.rent     = parseFloat(b.rentDetails.coldRent) || null;
+    if (b.rentDetails?.deposit  != null)      updateData.deposit  = parseFloat(b.rentDetails.deposit)  || null;
+    if (b.propertyDetails?.bedrooms != null)  updateData.bedrooms = parseInt(b.propertyDetails.bedrooms, 10)  || null;
+    if (b.propertyDetails?.bathrooms != null) updateData.bathrooms= parseInt(b.propertyDetails.bathrooms, 10) || null;
+    if (b.propertyDetails?.sizeSqm != null)   updateData.area     = parseFloat(b.propertyDetails.sizeSqm)     || null;
+    if (b.amenities?.furnished   != null)     updateData.furnished         = !!b.amenities.furnished;
+    if (b.amenities?.petsAllowed != null)     updateData.petsAllowed       = !!b.amenities.petsAllowed;
+    if (b.amenities?.parking     != null)     updateData.parkingAvailable  = !!b.amenities.parking;
 
     const updateStart = Date.now();
     const updated = await prisma.accommodation.update({
