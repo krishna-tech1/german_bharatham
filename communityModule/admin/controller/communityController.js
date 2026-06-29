@@ -1,39 +1,42 @@
-const Guide = require("../model/Guide");
+const prisma = require("../../../config/prisma");
 
-// public list – most recent first
+const mapGuide = (g) => {
+  if (!g) return null;
+  return {
+    ...g,
+    _id: String(g.id)
+  };
+};
+
 exports.getAllGuides = async (req, res) => {
   const start = Date.now();
   console.log(`🚀 [START] getAllGuides (admin) called at ${new Date().toISOString()}`);
   try {
-    console.log(`🔍 [DB QUERY] Fetching all Guide documents sorted by createdAt`);
-    const queryStart = Date.now();
-    const guides = await Guide.find().sort({ createdAt: -1 });
-    console.log(`✅ [DB RESULT] find() returned ${guides.length} documents in ${Date.now() - queryStart}ms`);
-    
-    console.log(`📤 [RESPONSE] Sending 200 with ${guides.length} items after ${Date.now() - start}ms`);
-    res.json(guides);
+    const guides = await prisma.guide.findMany({
+      orderBy: { createdAt: 'desc' }
+    });
+    res.json(guides.map(mapGuide));
   } catch (err) {
     console.error(`❌ [ERROR] getAllGuides failed: ${err.message} after ${Date.now() - start}ms`);
     res.status(500).json({ message: err.message });
   }
 };
 
-
 exports.getGuideById = async (req, res) => {
   const start = Date.now();
   console.log(`🚀 [START] getGuideById (admin) called with id=${req.params.id} at ${new Date().toISOString()}`);
   try {
-    console.log(`🔍 [DB QUERY] Fetching Guide by ID: ${req.params.id}`);
-    const queryStart = Date.now();
-    const guide = await Guide.findById(req.params.id);
-    console.log(`✅ [DB RESULT] findById completed in ${Date.now() - queryStart}ms - ${guide ? 'found' : 'not found'}`);
+    const numericId = parseInt(req.params.id);
+    if (isNaN(numericId)) return res.status(400).json({ message: "Invalid ID format" });
+
+    const guide = await prisma.guide.findUnique({
+      where: { id: numericId }
+    });
     
     if (!guide) {
-      console.log(`📤 [RESPONSE] Sending 404 after ${Date.now() - start}ms`);
       return res.status(404).json({ message: "Not found" });
     }
-    console.log(`📤 [RESPONSE] Sending 200 after ${Date.now() - start}ms`);
-    res.json(guide);
+    res.json(mapGuide(guide));
   } catch (err) {
     console.error(`❌ [ERROR] getGuideById failed: ${err.message} after ${Date.now() - start}ms`);
     res.status(500).json({ message: err.message });
@@ -44,14 +47,22 @@ exports.createGuide = async (req, res) => {
   const start = Date.now();
   console.log(`🚀 [START] createGuide (admin) called at ${new Date().toISOString()}`);
   try {
-    console.log(`🔍 [DB QUERY] Creating and saving new Guide`);
-    const saveStart = Date.now();
-    const guide = new Guide(req.body);
-    const saved = await guide.save();
-    console.log(`✅ [DB RESULT] Guide saved with ID ${saved._id} in ${Date.now() - saveStart}ms`);
-    
-    console.log(`📤 [RESPONSE] Sending 201 response after ${Date.now() - start}ms`);
-    res.status(201).json(saved);
+    const keyPoints = Array.isArray(req.body.keyPoints) ? req.body.keyPoints.map(k => String(k)) : [];
+    const saved = await prisma.guide.create({
+      data: {
+        title: req.body.title,
+        category: req.body.category || null,
+        readTime: req.body.readTime ? parseInt(req.body.readTime, 10) : null,
+        description: req.body.description || null,
+        keyPoints,
+        content: req.body.content || null,
+        officialWebsites: req.body.officialWebsites || null,
+        communityDiscussions: req.body.communityDiscussions || null,
+        author: req.body.author || "German Bharatham Team",
+        date: req.body.date || new Date().toDateString()
+      }
+    });
+    res.status(201).json(mapGuide(saved));
   } catch (err) {
     console.error(`❌ [ERROR] createGuide failed: ${err.message} after ${Date.now() - start}ms`);
     res.status(400).json({ message: err.message });
@@ -62,17 +73,25 @@ exports.updateGuide = async (req, res) => {
   const start = Date.now();
   console.log(`🚀 [START] updateGuide (admin) called with id=${req.params.id} at ${new Date().toISOString()}`);
   try {
-    console.log(`🔍 [DB QUERY] Updating Guide with ID: ${req.params.id}`);
-    const updateStart = Date.now();
-    const updated = await Guide.findByIdAndUpdate(
-      req.params.id,
-      req.body,
-      { new: true }
-    );
-    console.log(`✅ [DB RESULT] Update completed in ${Date.now() - updateStart}ms`);
-    
-    console.log(`📤 [RESPONSE] Sending 200 response after ${Date.now() - start}ms`);
-    res.json(updated);
+    const numericId = parseInt(req.params.id);
+    if (isNaN(numericId)) return res.status(400).json({ message: "Invalid ID format" });
+
+    const updateData = { ...req.body };
+    delete updateData._id;
+    delete updateData.id;
+
+    if (req.body.keyPoints) {
+      updateData.keyPoints = Array.isArray(req.body.keyPoints) ? req.body.keyPoints.map(k => String(k)) : [];
+    }
+    if (req.body.readTime) {
+      updateData.readTime = parseInt(req.body.readTime, 10);
+    }
+
+    const updated = await prisma.guide.update({
+      where: { id: numericId },
+      data: updateData
+    });
+    res.json(mapGuide(updated));
   } catch (err) {
     console.error(`❌ [ERROR] updateGuide failed: ${err.message} after ${Date.now() - start}ms`);
     res.status(400).json({ message: err.message });
@@ -83,12 +102,12 @@ exports.deleteGuide = async (req, res) => {
   const start = Date.now();
   console.log(`🚀 [START] deleteGuide (admin) called with id=${req.params.id} at ${new Date().toISOString()}`);
   try {
-    console.log(`🔍 [DB QUERY] Deleting Guide with ID: ${req.params.id}`);
-    const deleteStart = Date.now();
-    await Guide.findByIdAndDelete(req.params.id);
-    console.log(`✅ [DB RESULT] Delete completed in ${Date.now() - deleteStart}ms`);
-    
-    console.log(`📤 [RESPONSE] Sending 200 response after ${Date.now() - start}ms`);
+    const numericId = parseInt(req.params.id);
+    if (isNaN(numericId)) return res.status(400).json({ message: "Invalid ID format" });
+
+    await prisma.guide.delete({
+      where: { id: numericId }
+    });
     res.json({ message: "Deleted successfully" });
   } catch (err) {
     console.error(`❌ [ERROR] deleteGuide failed: ${err.message} after ${Date.now() - start}ms`);

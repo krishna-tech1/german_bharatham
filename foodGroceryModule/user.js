@@ -1,8 +1,16 @@
 const express = require("express");
 const router = express.Router();
-const FoodGrocery = require("./admin/model/FoodGrocery");
-const Rating = require("./admin/model/Rating");
+const prisma = require("../config/prisma");
 const { protect } = require("../middleware/auth");
+
+// Helper to map PostgreSQL Prisma FoodGrocery to match frontend _id expectations
+const mapFoodGrocery = (item) => {
+  if (!item) return null;
+  return {
+    ...item,
+    _id: String(item.id),
+  };
+};
 
 // Custom middleware to handle both authenticated and guest users
 const protectOrGuest = async (req, res, next) => {
@@ -35,16 +43,26 @@ const protectOrGuest = async (req, res, next) => {
 
     // For regular tokens, use the normal protect middleware
     const jwt = require("jsonwebtoken");
-    const User = require("../userModule/user/models/User");
     
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findById(decoded.id).select("-password");
+    const numericId = parseInt(decoded.id);
+
+    if (isNaN(numericId)) {
+      return res.status(401).json({ message: "Invalid user token ID format" });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: numericId }
+    });
 
     if (!user) {
       return res.status(401).json({ message: "User not found" });
     }
 
-    req.user = user;
+    req.user = {
+      ...user,
+      _id: String(user.id)
+    };
     next();
   } catch (error) {
     return res.status(401).json({ message: "Token failed" });
@@ -53,40 +71,42 @@ const protectOrGuest = async (req, res, next) => {
 
 // @route   GET /api/user/foodgrocery
 // @desc    Get all active food & grocery listings for users
-// @access  Public
 router.get("/", async (req, res) => {
   try {
     const { search, subCategory, city } = req.query;
     
     // Build query - only show Active items to users
-    let query = { status: { $regex: /^active$/i } };
-    
-    // Add search filter
-    if (search) {
-      query.$or = [
-        { title: { $regex: search, $options: 'i' } },
-        { location: { $regex: search, $options: 'i' } },
-        { city: { $regex: search, $options: 'i' } },
-        { address: { $regex: search, $options: 'i' } },
-        { description: { $regex: search, $options: 'i' } }
-      ];
-    }
+    const where = {
+      status: { equals: 'Active', mode: 'insensitive' }
+    };
     
     // Add subCategory filter
     if (subCategory) {
-      query.subCategory = subCategory;
+      where.subCategory = subCategory;
     }
     
     // Add city filter
     if (city) {
-      query.city = { $regex: city, $options: 'i' };
+      where.city = { contains: city, mode: 'insensitive' };
+    }
+
+    // If search is present, perform OR logic
+    if (search) {
+      where.OR = [
+        { title: { contains: search, mode: 'insensitive' } },
+        { location: { contains: search, mode: 'insensitive' } },
+        { city: { contains: search, mode: 'insensitive' } },
+        { address: { contains: search, mode: 'insensitive' } },
+        { description: { contains: search, mode: 'insensitive' } }
+      ];
     }
     
-    const listings = await FoodGrocery.find(query)
-      .sort({ createdAt: -1 })
-      .lean();
+    const listings = await prisma.foodGrocery.findMany({
+      where,
+      orderBy: { createdAt: 'desc' }
+    });
     
-    res.json(listings);
+    res.json(listings.map(mapFoodGrocery));
   } catch (error) {
     console.error('Error fetching food grocery listings:', error);
     res.status(500).json({ message: error.message });
@@ -95,10 +115,14 @@ router.get("/", async (req, res) => {
 
 // @route   GET /api/user/foodgrocery/:id
 // @desc    Get single food & grocery listing by ID
-// @access  Public
 router.get("/:id", async (req, res) => {
   try {
-    const listing = await FoodGrocery.findById(req.params.id).lean();
+    const numericId = parseInt(req.params.id);
+    if (isNaN(numericId)) return res.status(400).json({ message: "Invalid ID format" });
+
+    const listing = await prisma.foodGrocery.findUnique({
+      where: { id: numericId }
+    });
     
     if (!listing) {
       return res.status(404).json({ message: 'Listing not found' });
@@ -109,7 +133,7 @@ router.get("/:id", async (req, res) => {
       return res.status(404).json({ message: 'Listing not available' });
     }
     
-    res.json(listing);
+    res.json(mapFoodGrocery(listing));
   } catch (error) {
     console.error('Error fetching food grocery details:', error);
     res.status(500).json({ message: error.message });
@@ -118,7 +142,6 @@ router.get("/:id", async (req, res) => {
 
 // @route   POST /api/user/foodgrocery/:id/rating
 // @desc    Submit a rating for a restaurant
-// @access  Private (requires authentication or guest token)
 router.post("/:id/rating", protectOrGuest, async (req, res) => {
   try {
     const { rating, comment } = req.body;
@@ -126,13 +149,19 @@ router.post("/:id/rating", protectOrGuest, async (req, res) => {
     const userId = req.user.id;
     const userName = req.user.name || req.user.email;
 
+    const numericFoodId = parseInt(foodGroceryId);
+    if (isNaN(numericFoodId)) return res.status(400).json({ message: "Invalid listing ID format" });
+
     // Validate rating
     if (!rating || rating < 1 || rating > 5) {
       return res.status(400).json({ message: 'Rating must be between 1 and 5' });
     }
 
     // Check if listing exists and is active
-    const listing = await FoodGrocery.findById(foodGroceryId);
+    const listing = await prisma.foodGrocery.findUnique({
+      where: { id: numericFoodId }
+    });
+
     if (!listing) {
       return res.status(404).json({ message: 'Listing not found' });
     }
@@ -141,32 +170,45 @@ router.post("/:id/rating", protectOrGuest, async (req, res) => {
     }
 
     // Create new rating (users can rate multiple times)
-    const newRating = new Rating({
-      foodGroceryId,
-      userId,
-      userName,
-      rating: Number(rating),
-      comment: comment || ""
+    const newRating = await prisma.universalRating.create({
+      data: {
+        entityId: numericFoodId,
+        entityType: "foodgrocery",
+        userId: String(userId),
+        userName,
+        rating: Number(rating),
+        review: comment || "",
+        status: "active"
+      }
     });
 
-    await newRating.save();
-
     // Recalculate average rating
-    const allRatings = await Rating.find({ foodGroceryId });
+    const allRatings = await prisma.universalRating.findMany({
+      where: { entityId: numericFoodId, entityType: "foodgrocery" }
+    });
     const totalRatings = allRatings.length;
     const sumRatings = allRatings.reduce((sum, r) => sum + r.rating, 0);
     const averageRating = totalRatings > 0 ? (sumRatings / totalRatings).toFixed(1) : 0;
 
     // Update the FoodGrocery document
-    listing.averageRating = Number(averageRating);
-    listing.totalRatings = totalRatings;
-    await listing.save();
+    const updatedListing = await prisma.foodGrocery.update({
+      where: { id: numericFoodId },
+      data: {
+        averageRating: Number(averageRating),
+        totalRatings: totalRatings
+      }
+    });
 
     res.status(201).json({ 
       message: 'Rating submitted successfully',
-      rating: newRating,
-      averageRating: listing.averageRating,
-      totalRatings: listing.totalRatings
+      rating: {
+        ...newRating,
+        _id: String(newRating.id),
+        foodGroceryId: String(newRating.entityId),
+        comment: newRating.review
+      },
+      averageRating: updatedListing.averageRating,
+      totalRatings: updatedListing.totalRatings
     });
   } catch (error) {
     console.error('Error submitting rating:', error);
@@ -176,16 +218,26 @@ router.post("/:id/rating", protectOrGuest, async (req, res) => {
 
 // @route   GET /api/user/foodgrocery/:id/ratings
 // @desc    Get all ratings for a restaurant
-// @access  Public
 router.get("/:id/ratings", async (req, res) => {
   try {
     const foodGroceryId = req.params.id;
+    const numericFoodId = parseInt(foodGroceryId);
+    if (isNaN(numericFoodId)) return res.status(400).json({ message: "Invalid ID format" });
     
-    const ratings = await Rating.find({ foodGroceryId })
-      .sort({ createdAt: -1 })
-      .lean();
+    const ratings = await prisma.universalRating.findMany({
+      where: { entityId: numericFoodId, entityType: "foodgrocery" },
+      orderBy: { createdAt: 'desc' }
+    });
     
-    res.json(ratings);
+    // Map response keys to match old Rating mongoose schema expectation
+    const mappedRatings = ratings.map(r => ({
+      ...r,
+      _id: String(r.id),
+      foodGroceryId: String(r.entityId),
+      comment: r.review
+    }));
+
+    res.json(mappedRatings);
   } catch (error) {
     console.error('Error fetching ratings:', error);
     res.status(500).json({ message: error.message });

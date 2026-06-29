@@ -1,16 +1,28 @@
 const express = require("express");
 const router = express.Router();
-const Accommodation = require("./accomodation");
+const prisma = require("../config/prisma");
+
+// Helper to map PostgreSQL Prisma accommodation to match frontend _id expectations
+const mapAccommodation = (item) => {
+  if (!item) return null;
+  return {
+    ...item,
+    _id: String(item.id),
+  };
+};
 
 // GET ALL
 router.get("/", async (req, res) => {
   try {
-    const data = await Accommodation.find({
-      status: { $regex: /^active$/i },
-      title: { $exists: true, $nin: [null, ""] },
-      city: { $exists: true, $nin: [null, ""] }
-    }).sort({ createdAt: -1 });
-    res.status(200).json(data);
+    const data = await prisma.accommodation.findMany({
+      where: {
+        status: { equals: 'Active', mode: 'insensitive' },
+        title: { not: "" },
+        city: { not: "" }
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+    res.status(200).json(data.map(mapAccommodation));
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -19,10 +31,15 @@ router.get("/", async (req, res) => {
 // GET SINGLE
 router.get("/:id", async (req, res) => {
   try {
-    const data = await Accommodation.findById(req.params.id);
+    const numericId = parseInt(req.params.id);
+    if (isNaN(numericId)) return res.status(400).json({ message: "Invalid ID format" });
+
+    const data = await prisma.accommodation.findUnique({
+      where: { id: numericId }
+    });
     if (!data)
       return res.status(404).json({ message: "Accommodation not found" });
-    res.status(200).json(data);
+    res.status(200).json(mapAccommodation(data));
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

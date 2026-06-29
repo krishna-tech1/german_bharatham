@@ -1,12 +1,11 @@
 const jwt = require("jsonwebtoken");
-const User = require("../userModule/user/models/User"); // adjust path if needed
+const prisma = require("../config/prisma");
 
 // 🔐 Verify Token Middleware
 exports.protect = async (req, res, next) => {
   try {
     let token;
 
-    // Check Authorization header
     if (
       req.headers.authorization &&
       req.headers.authorization.startsWith("Bearer")
@@ -20,25 +19,37 @@ exports.protect = async (req, res, next) => {
 
     // Verify token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const numericId = parseInt(decoded.id);
 
-    // Fetch fresh user from DB (IMPORTANT)
-    const user = await User.findById(decoded.id).select("-password");
-    
-    if (!user) {
+    if (isNaN(numericId)) {
+      return res.status(401).json({ message: "Invalid token ID format" });
+    }
+
+    const prismaUser = await prisma.user.findUnique({
+      where: { id: numericId }
+    });
+
+    if (!prismaUser) {
       return res.status(401).json({ message: "User not found" });
     }
 
+    // Attach fields matching old Mongoose document expectations
+    const user = {
+      ...prismaUser,
+      id: String(prismaUser.id),
+      _id: String(prismaUser.id)
+    };
+
     // Check if user is active
-    // We check explicitly for false to allow existing users (where field might be undefined) to remain active.
     if (user.isActive === false) {
-      console.warn(`🛑 [AUTH] Blocked access for deactivated user: ${user.email} (${user._id})`);
+      console.warn(`🛑 [AUTH] Blocked access for deactivated user: ${user.email} (${user.id})`);
       return res.status(403).json({
         message: "Account deactivated. Please contact support.",
         code: "ACCOUNT_DEACTIVATED"
       });
     }
 
-    req.user = user; // attach full user object
+    req.user = user;
     next();
   } catch (error) {
     return res.status(401).json({ message: "Token failed" });

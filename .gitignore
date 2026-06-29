@@ -39,3 +39,5 @@ uploads/*
 
 # Generated
 .cache/
+
+/generated/prisma

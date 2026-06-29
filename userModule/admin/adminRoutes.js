@@ -1,13 +1,24 @@
 const express = require("express");
 const router = express.Router();
+const prisma = require("../../config/prisma");
 const { adminLogin } = require("./adminController");
 const { getCategoryStats, getDashboardStats } = require("./dashboardController");
 const { protect, adminOnly } = require("../../middleware/auth");
-const Accommodation = require("../../accommodationModule/admin/model/Accommodation");
-const FoodGrocery = require("../../foodGroceryModule/admin/model/FoodGrocery");
-const Job = require("../../jobsModule/admin/model/Job");
-const Service = require("../../servicesModule/admin/model/Service");
-const User = require("../../userModule/user/models/User");
+
+const mapItem = (item) => {
+  if (!item) return null;
+  const mapped = {
+    ...item,
+    _id: String(item.id),
+  };
+  if (mapped.createdBy) {
+    mapped.createdBy = {
+      ...mapped.createdBy,
+      _id: String(mapped.createdBy.id)
+    };
+  }
+  return mapped;
+};
 
 // Login
 router.post("/login", (req, res, next) => {
@@ -24,16 +35,16 @@ router.get("/category-stats", protect, adminOnly, getCategoryStats);
 router.get("/all-listings", protect, adminOnly, async (req, res) => {
   try {
     const [accommodations, foods, jobs, services] = await Promise.all([
-      Accommodation.find().populate("createdBy", "name email").limit(100).lean(),
-      FoodGrocery.find().populate("createdBy", "name email").limit(100).lean(),
-      Job.find().populate("createdBy", "name email").limit(100).lean(),
-      Service.find().populate("createdBy", "name email").limit(100).lean(),
+      prisma.accommodation.findMany({ include: { createdBy: true }, take: 100 }),
+      prisma.foodGrocery.findMany({ include: { createdBy: true }, take: 100 }),
+      prisma.jobListing.findMany({ include: { createdBy: true }, take: 100 }),
+      prisma.service.findMany({ include: { createdBy: true }, take: 100 }),
     ]);
     res.json({
-      Accommodation: accommodations,
-      Food: foods,
-      Jobs: jobs,
-      Services: services,
+      Accommodation: accommodations.map(mapItem),
+      Food: foods.map(mapItem),
+      Jobs: jobs.map(mapItem),
+      Services: services.map(mapItem),
     });
   } catch (error) {
     console.error("❌ all-listings error:", error.message);
@@ -44,17 +55,18 @@ router.get("/all-listings", protect, adminOnly, async (req, res) => {
 // Pending listings (for Content Moderation page)
 router.get("/pending-listings", protect, adminOnly, async (req, res) => {
   try {
+    const pendingFilter = { status: { equals: 'pending', mode: 'insensitive' } };
     const [accommodations, foods, jobs, services] = await Promise.all([
-      Accommodation.find({ status: { $regex: /^pending$/i } }).populate("createdBy", "name email").limit(50).lean(),
-      FoodGrocery.find({ status: { $regex: /^pending$/i } }).populate("createdBy", "name email").limit(50).lean(),
-      Job.find({ status: { $regex: /^pending$/i } }).populate("createdBy", "name email").limit(50).lean(),
-      Service.find({ status: { $regex: /^pending$/i } }).populate("createdBy", "name email").limit(50).lean(),
+      prisma.accommodation.findMany({ where: pendingFilter, include: { createdBy: true }, take: 50 }),
+      prisma.foodGrocery.findMany({ where: pendingFilter, include: { createdBy: true }, take: 50 }),
+      prisma.jobListing.findMany({ where: pendingFilter, include: { createdBy: true }, take: 50 }),
+      prisma.service.findMany({ where: pendingFilter, include: { createdBy: true }, take: 50 }),
     ]);
     res.json({
-      Accommodation: accommodations,
-      Food: foods,
-      Jobs: jobs,
-      Services: services,
+      Accommodation: accommodations.map(mapItem),
+      Food: foods.map(mapItem),
+      Jobs: jobs.map(mapItem),
+      Services: services.map(mapItem),
     });
   } catch (error) {
     console.error("❌ pending-listings error:", error.message);

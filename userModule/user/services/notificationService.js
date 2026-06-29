@@ -1,5 +1,4 @@
-const Notification = require('../models/Notification');
-const User = require('../models/User');
+const prisma = require('../../../config/prisma');
 
 async function broadcastNotification({
   type,
@@ -15,27 +14,37 @@ async function broadcastNotification({
   if (!title) throw new Error('title is required');
   if (!message) throw new Error('message is required');
 
-  const recipients = await User.find({ role: 'user', isActive: true })
-    .select('_id')
-    .lean();
+  let postgresInserted = 0;
+  try {
+    const pgRecipients = await prisma.user.findMany({
+      where: { role: 'user', isActive: true },
+      select: { id: true }
+    });
+    if (pgRecipients.length) {
+      let pgSenderId = null;
+      if (sender) {
+        const parsed = parseInt(sender);
+        if (!isNaN(parsed)) pgSenderId = parsed;
+      }
+      const pgDocs = pgRecipients.map((u) => ({
+        recipientId: u.id,
+        senderId: pgSenderId,
+        type,
+        title,
+        message,
+        senderName,
+        senderPhoto,
+        data: data || undefined, // Prisma Json field
+        read,
+      }));
+      await prisma.notification.createMany({ data: pgDocs });
+      postgresInserted = pgDocs.length;
+    }
+  } catch (err) {
+    console.error("Failed to broadcast notification to PostgreSQL:", err);
+  }
 
-  if (!recipients.length) return { inserted: 0 };
-
-  const docs = recipients.map((u) => ({
-    recipient: u._id,
-    sender,
-    type,
-    title,
-    message,
-    senderName,
-    senderPhoto,
-    data,
-    read,
-  }));
-
-  // insertMany is much faster than create() in a loop.
-  await Notification.insertMany(docs, { ordered: false });
-  return { inserted: docs.length };
+  return { inserted: postgresInserted };
 }
 
 async function notifyListingActivated({ module, entityId, listingTitle }) {
@@ -57,7 +66,7 @@ async function notifyListingActivated({ module, entityId, listingTitle }) {
     senderPhoto: null,
     data: {
       module,
-      entityId,
+      entityId: String(entityId),
     },
     read: false,
   });

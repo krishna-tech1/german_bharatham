@@ -1,7 +1,4 @@
-const Subscription = require("./models/Subscription");
-const User = require("../userModule/user/models/User");
-const Plan = require("./models/Plan");
-
+const prisma = require("../config/prisma");
 const axios = require("axios");
 const crypto = require("crypto");
 
@@ -38,44 +35,37 @@ const ensureDefaultPlans = async () => {
 
   const defaults = [
     { id: "free", label: "Free (7 days)", durationDays: 7, priceInr: 0, currency, active: true },
-    { id: "1m", label: "1 Month", durationDays: 30, priceInr: price1m || 0, currency },
-    { id: "3m", label: "3 Months", durationDays: 90, priceInr: price3m || 0, currency },
-    { id: "6m", label: "6 Months", durationDays: 180, priceInr: price6m || 0, currency },
-    { id: "1y", label: "1 Year", durationDays: 365, priceInr: price1y || 0, currency },
+    { id: "1m", label: "1 Month", durationDays: 30, priceInr: price1m || 0, currency, active: true },
+    { id: "3m", label: "3 Months", durationDays: 90, priceInr: price3m || 0, currency, active: true },
+    { id: "6m", label: "6 Months", durationDays: 180, priceInr: price6m || 0, currency, active: true },
+    { id: "1y", label: "1 Year", durationDays: 365, priceInr: price1y || 0, currency, active: true },
   ];
 
-  const existing = await Plan.find({ id: { $in: defaults.map((d) => d.id) } })
-    .select("id")
-    .lean();
-  const existingIds = new Set(existing.map((e) => e.id));
-  const toCreate = defaults.filter((d) => !existingIds.has(d.id));
-  if (toCreate.length > 0) {
-    await Plan.insertMany(toCreate.map((p) => ({ ...p, active: true })), { ordered: false });
+  for (const plan of defaults) {
+    await prisma.subscriptionPlan.upsert({
+      where: { id: plan.id },
+      update: {},
+      create: plan
+    });
   }
 };
 
 const listActivePlans = async () => {
   await ensureDefaultPlans();
-  return Plan.find({ active: true }).sort({ durationDays: 1 }).lean();
+  return prisma.subscriptionPlan.findMany({
+    where: { active: true },
+    orderBy: { durationDays: 'asc' }
+  });
 };
 
 const getPlanById = async (planId) => {
   await ensureDefaultPlans();
   const raw = String(planId || "").trim();
   if (!raw) return null;
-  // Try by app-level id first
-  let plan = await Plan.findOne({ id: raw }).lean();
-  if (plan) return plan;
-  // Fallback: maybe client sent Mongo _id
-  try {
-    if (/^[0-9a-fA-F]{24}$/.test(raw)) {
-      plan = await Plan.findById(raw).lean();
-      if (plan) return plan;
-    }
-  } catch (e) {
-    // ignore
-  }
-  return null;
+  
+  return prisma.subscriptionPlan.findUnique({
+    where: { id: raw }
+  });
 };
 
 const normalizePhoneDigits = (phone) => {
@@ -130,80 +120,93 @@ exports.getPlans = async (_req, res) => {
 };
 
 exports.getMySubscription = async (req, res) => {
-  const sub = await Subscription.findOne({ userId: req.user.id }).sort({ createdAt: -1 }).lean();
-  let user = await User.findById(req.user.id).select(
-    "subscriptionStatus subscriptionPlan subscriptionExpiresAt firstLoginAt lastLoginAt"
-  ).lean();
+  const numericUserId = parseInt(req.user.id);
+  if (isNaN(numericUserId)) return res.status(401).json({ message: "Invalid user session" });
 
-  // If user is new and has no subscription, ensure correct defaults
-  if (user && !user.subscriptionPlan && (!user.subscriptionStatus || user.subscriptionStatus === 'none')) {
-    user.subscriptionPlan = null;
-    user.subscriptionStatus = 'none';
-    user.subscriptionExpiresAt = null;
-  }
+  const sub = await prisma.subscription.findFirst({
+    where: { userId: numericUserId },
+    orderBy: { createdAt: 'desc' }
+  });
 
+  const user = await prisma.user.findUnique({
+    where: { id: numericUserId },
+    select: {
+      id: true,
+      phone: true,
+      subscriptionStatus: true,
+      subscriptionPlan: true,
+      subscriptionExpiresAt: true,
+      firstLoginAt: true,
+      lastLoginAt: true,
+      createdAt: true
+    }
+  });
+
+  // Re-inject mapped _id for frontend compatibility
+  const mappedUser = user ? { ...user, _id: String(user.id) } : null;
 
   // Determine if free trial is completed or not eligible (phone reused)
   let freeTrialCompleted = false;
-  if (user) {
-    // Check if this phone number is unique (first user with this phone)
-    const userDoc = await User.findById(req.user.id).select("phone createdAt");
-    if (userDoc && userDoc.phone) {
-      const phoneDigits = normalizePhoneDigits(userDoc.phone);
-      const firstUserWithPhone = await User.find({
-        $or: [
-          { phone: String(userDoc.phone) },
-          { phone: phoneDigits },
-          { phone: `+${phoneDigits}` },
-          { phone: new RegExp(`${phoneDigits}$`) },
-        ],
-      })
-        .sort({ createdAt: 1 })
-        .limit(1);
-      if (!firstUserWithPhone.length || String(firstUserWithPhone[0]._id) !== String(req.user.id)) {
-        // Not the first signup with this phone, so free trial is completed/blocked
-        freeTrialCompleted = true;
-      }
-    }
-    // Also, if user already used or expired their free trial, mark as completed
-    if (user.subscriptionPlan === "free") {
-      if (user.subscriptionExpiresAt && new Date(user.subscriptionExpiresAt) < new Date()) {
-        freeTrialCompleted = true;
-      }
-    } else if (user.subscriptionPlan) {
+  if (mappedUser && mappedUser.phone) {
+    const phoneDigits = normalizePhoneDigits(mappedUser.phone);
+    const firstUserWithPhone = await prisma.user.findMany({
+      where: {
+        OR: [
+          { phone: { equals: String(mappedUser.phone) } },
+          { phone: { equals: phoneDigits } },
+          { phone: { endsWith: phoneDigits } }
+        ]
+      },
+      orderBy: { createdAt: 'asc' },
+      take: 1
+    });
+
+    if (firstUserWithPhone.length > 0 && firstUserWithPhone[0].id !== numericUserId) {
       freeTrialCompleted = true;
     }
   }
 
-  // If the stored subscription period has already passed, reflect that in
-  // the returned user object so clients show the correct UI. Do not throw
-  // here if DB is out-of-date; just adjust the in-memory response.
-  if (user && user.subscriptionExpiresAt && new Date(user.subscriptionExpiresAt) < new Date()) {
-    if (user.subscriptionStatus === 'active' || user.subscriptionStatus === 'trial') {
-      user.subscriptionStatus = 'none';
-      // Clear active plan so UI no longer treats it as current
-      user.subscriptionPlan = null;
+  if (mappedUser) {
+    if (mappedUser.subscriptionPlan === "free") {
+      if (mappedUser.subscriptionExpiresAt && new Date(mappedUser.subscriptionExpiresAt) < new Date()) {
+        freeTrialCompleted = true;
+      }
+    } else if (mappedUser.subscriptionPlan) {
+      freeTrialCompleted = true;
+    }
+  }
+
+  // Adjust in-memory status if expired
+  if (mappedUser && mappedUser.subscriptionExpiresAt && new Date(mappedUser.subscriptionExpiresAt) < new Date()) {
+    if (mappedUser.subscriptionStatus === 'active' || mappedUser.subscriptionStatus === 'trial') {
+      mappedUser.subscriptionStatus = 'none';
+      mappedUser.subscriptionPlan = null;
     }
   }
 
   return res.status(200).json({
-    user: user ? { ...user, freeTrialCompleted } : null,
-    subscription: sub || null,
+    user: mappedUser ? { ...mappedUser, freeTrialCompleted } : null,
+    subscription: sub ? { ...sub, _id: String(sub.id) } : null,
     serverTime: new Date().toISOString(),
   });
 };
 
 // Return the authenticated user's payment/subscription history.
 exports.getPaymentHistory = async (req, res) => {
-  const items = await Subscription.find({ userId: req.user.id })
-    .sort({ createdAt: -1 })
-    .lean();
+  const numericUserId = parseInt(req.user.id);
+  if (isNaN(numericUserId)) return res.status(401).json({ message: "Invalid user session" });
 
-  // Load plan metadata to include price/label where available
+  const items = await prisma.subscription.findMany({
+    where: { userId: numericUserId },
+    orderBy: { createdAt: 'desc' }
+  });
+
   const planIds = Array.from(new Set(items.map((it) => it.planId).filter(Boolean)));
   const plansMap = {};
   if (planIds.length > 0) {
-    const planDocs = await Plan.find({ id: { $in: planIds } }).lean();
+    const planDocs = await prisma.subscriptionPlan.findMany({
+      where: { id: { in: planIds } }
+    });
     planDocs.forEach((p) => (plansMap[p.id] = p));
   }
 
@@ -221,38 +224,41 @@ exports.getPaymentHistory = async (req, res) => {
 };
 
 exports.createCheckoutSession = async (req, res) => {
-  // Kept for backward compatibility with existing mobile/web clients.
-  // Under the hood this now creates a Razorpay Payment Link and returns its short_url.
   try {
     const { planId } = req.body || {};
     const plan = await getPlanById(planId);
+    const numericUserId = parseInt(req.user.id);
 
+    if (isNaN(numericUserId)) return res.status(401).json({ message: "Invalid user session" });
     if (!plan || plan.active === false) return res.status(400).json({ message: "Invalid planId" });
 
     const effectivePrice = Number(plan.priceInr) || getFallbackPriceForPlan(plan.id);
 
     // Handle free plan (price 0) directly
     if (Number(effectivePrice) === 0) {
-        // Only allow free trial for first user with this phone number (robust matching)
-        const user = await User.findById(req.user.id).select("phone");
-        if (!user || !user.phone) {
-          return res.status(400).json({ message: "Phone number required for free trial" });
-        }
-        const phoneDigits = normalizePhoneDigits(user.phone);
-        const firstUserWithPhone = await User.find({
-          $or: [
-            { phone: String(user.phone) },
-            { phone: phoneDigits },
-            { phone: `+${phoneDigits}` },
-            { phone: new RegExp(`${phoneDigits}$`) },
-          ],
-        })
-          .sort({ createdAt: 1 })
-          .limit(1);
-        if (!firstUserWithPhone.length || String(firstUserWithPhone[0]._id) !== String(req.user.id)) {
-          // Not the first signup with this phone
-          return res.status(403).json({ message: "Free trial already used for this phone number" });
-        }
+      const user = await prisma.user.findUnique({
+        where: { id: numericUserId },
+        select: { id: true, phone: true }
+      });
+      if (!user || !user.phone) {
+        return res.status(400).json({ message: "Phone number required for free trial" });
+      }
+      const phoneDigits = normalizePhoneDigits(user.phone);
+      const firstUserWithPhone = await prisma.user.findMany({
+        where: {
+          OR: [
+            { phone: { equals: String(user.phone) } },
+            { phone: { equals: phoneDigits } },
+            { phone: { endsWith: phoneDigits } }
+          ]
+        },
+        orderBy: { createdAt: 'asc' },
+        take: 1
+      });
+
+      if (firstUserWithPhone.length > 0 && firstUserWithPhone[0].id !== numericUserId) {
+        return res.status(403).json({ message: "Free trial already used for this phone number" });
+      }
 
       // Activate free plan for user
       const now = new Date();
@@ -260,48 +266,61 @@ exports.createCheckoutSession = async (req, res) => {
       const currentPeriodStart = now;
       const currentPeriodEnd = expiresAt;
 
-      // Upsert a Subscription document so admin and history have a record
+      // Upsert a Subscription document using last subscription lookup
       try {
-        await Subscription.findOneAndUpdate(
-          { userId: req.user.id, provider: "razorpay", razorpayPaymentLinkId: null },
-          {
-            $set: {
-              userId: req.user.id,
-              provider: "razorpay",
-              planId: plan.id,
-              status: "active",
-              currentPeriodStart,
-              currentPeriodEnd,
-              metadata: { createdBy: "free_activation" },
-            },
-          },
-          { upsert: true, new: true }
-        );
+        const lastSub = await prisma.subscription.findFirst({
+          where: { userId: numericUserId, provider: "razorpay", razorpayPaymentLinkId: null },
+          orderBy: { createdAt: 'desc' }
+        });
+
+        const subPayload = {
+          userId: numericUserId,
+          provider: "razorpay",
+          planId: plan.id,
+          status: "active",
+          currentPeriodStart,
+          currentPeriodEnd,
+          metadata: { createdBy: "free_activation" }
+        };
+
+        if (lastSub) {
+          await prisma.subscription.update({
+            where: { id: lastSub.id },
+            data: subPayload
+          });
+        } else {
+          await prisma.subscription.create({
+            data: subPayload
+          });
+        }
       } catch (e) {
-        // non-fatal
-        console.warn('Failed to upsert free Subscription', e && e.message ? e.message : e);
+        console.warn('Failed to record free Subscription', e && e.message ? e.message : e);
       }
 
-      await User.findByIdAndUpdate(req.user.id, {
-        subscriptionStatus: "trial",
-        subscriptionPlan: plan.id,
-        subscriptionExpiresAt: expiresAt,
-        subscriptionStartedAt: currentPeriodStart,
+      await prisma.user.update({
+        where: { id: numericUserId },
+        data: {
+          subscriptionStatus: "trial",
+          subscriptionPlan: plan.id,
+          subscriptionExpiresAt: expiresAt,
+          subscriptionStartedAt: currentPeriodStart,
+        }
       });
       return res.status(200).json({ message: "Free plan activated", free: true });
     }
 
     if (!effectivePrice || Number(effectivePrice) <= 0) {
-      console.error("[createCheckoutSession] plan price not configured", { planId: plan.id, dbPrice: plan.priceInr, envFallback: getFallbackPriceForPlan(plan.id) });
-      return res.status(400).json({ message: "Plan price not configured", plan: { id: plan.id, priceInr: plan.priceInr, fallback: getFallbackPriceForPlan(plan.id) } });
+      return res.status(400).json({ message: "Plan price not configured" });
     }
 
-    const user = await User.findById(req.user.id).select("name email phone");
+    const user = await prisma.user.findUnique({
+      where: { id: numericUserId },
+      select: { name: true, email: true, phone: true }
+    });
     if (!user) return res.status(404).json({ message: "User not found" });
 
     const api = razorpayApi();
     const appBase = getBaseUrl(req);
-
     const description = `German Bharatham - ${plan.label || plan.id} subscription`;
 
     const payload = {
@@ -315,7 +334,7 @@ exports.createCheckoutSession = async (req, res) => {
         contact: String(user.phone || "").trim() || undefined,
       },
       notes: {
-        userId: String(req.user.id),
+        userId: String(numericUserId),
         planId: String(plan.id),
       },
       callback_url: `${appBase}/api/subscriptions/razorpay/callback`,
@@ -330,26 +349,33 @@ exports.createCheckoutSession = async (req, res) => {
       return res.status(500).json({ message: "Failed to create Razorpay payment link" });
     }
 
-    await Subscription.findOneAndUpdate(
-      { userId: req.user.id, razorpayPaymentLinkId: paymentLinkId },
-      {
-        $setOnInsert: {
-          userId: req.user.id,
+    // Upsert subscription
+    const existingSub = await prisma.subscription.findFirst({
+      where: { userId: numericUserId, razorpayPaymentLinkId: paymentLinkId },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    if (existingSub) {
+      await prisma.subscription.update({
+        where: { id: existingSub.id },
+        data: { planId: plan.id }
+      });
+    } else {
+      await prisma.subscription.create({
+        data: {
+          userId: numericUserId,
           provider: "razorpay",
           status: "pending",
           razorpayPaymentLinkId: paymentLinkId,
-          metadata: { createdBy: "payment_link" },
-        },
-        $set: {
           planId: plan.id,
-        },
-      },
-      { upsert: true, new: true }
-    );
+          metadata: { createdBy: "payment_link" }
+        }
+      });
+    }
 
     return res.status(200).json({ url });
   } catch (error) {
-    const status = error && error.response && error.response.status ? Number(error.response.status) : (error && error.statusCode ? Number(error.statusCode) : 500);
+    const status = error && error.response && error.response.status ? Number(error.response.status) : 500;
     const details = error && error.response && error.response.data ? JSON.stringify(error.response.data) : null;
     return res.status(status).json({
       message: error.message || "Failed to initialize payment",
@@ -358,16 +384,18 @@ exports.createCheckoutSession = async (req, res) => {
   }
 };
 
-// Create a Razorpay Order for client-side checkout (used by native/mobile SDKs)
 exports.createRazorpayOrder = async (req, res) => {
   try {
     const { planId } = req.body || {};
     const plan = await getPlanById(planId);
+    const numericUserId = parseInt(req.user.id);
+
+    if (isNaN(numericUserId)) return res.status(401).json({ message: "Invalid user session" });
     if (!plan || plan.active === false) return res.status(400).json({ message: "Invalid planId" });
 
     const effectivePrice = Number(plan.priceInr) || getFallbackPriceForPlan(plan.id);
 
-    // Handle free plan (price 0) directly — activate trial without creating an order
+    // Handle free plan (price 0) directly
     if (Number(effectivePrice) === 0) {
       const now = new Date();
       const expiresAt = new Date(now.getTime() + (plan.durationDays || 7) * 24 * 60 * 60 * 1000);
@@ -375,41 +403,56 @@ exports.createRazorpayOrder = async (req, res) => {
       const currentPeriodEnd = expiresAt;
 
       try {
-        await Subscription.findOneAndUpdate(
-          { userId: req.user.id, provider: "razorpay", razorpayPaymentLinkId: null },
-          {
-            $set: {
-              userId: req.user.id,
-              provider: "razorpay",
-              planId: plan.id,
-              status: "active",
-              currentPeriodStart,
-              currentPeriodEnd,
-              metadata: { createdBy: "free_activation" },
-            },
-          },
-          { upsert: true, new: true }
-        );
+        const lastSub = await prisma.subscription.findFirst({
+          where: { userId: numericUserId, provider: "razorpay", razorpayPaymentLinkId: null },
+          orderBy: { createdAt: 'desc' }
+        });
+
+        const subPayload = {
+          userId: numericUserId,
+          provider: "razorpay",
+          planId: plan.id,
+          status: "active",
+          currentPeriodStart,
+          currentPeriodEnd,
+          metadata: { createdBy: "free_activation" }
+        };
+
+        if (lastSub) {
+          await prisma.subscription.update({
+            where: { id: lastSub.id },
+            data: subPayload
+          });
+        } else {
+          await prisma.subscription.create({
+            data: subPayload
+          });
+        }
       } catch (e) {
         console.error('Failed to upsert free Subscription', e && e.message ? e.message : e);
       }
 
-      await User.findByIdAndUpdate(req.user.id, {
-        subscriptionStatus: "trial",
-        subscriptionPlan: plan.id,
-        subscriptionExpiresAt: expiresAt,
-        subscriptionStartedAt: currentPeriodStart,
+      await prisma.user.update({
+        where: { id: numericUserId },
+        data: {
+          subscriptionStatus: "trial",
+          subscriptionPlan: plan.id,
+          subscriptionExpiresAt: expiresAt,
+          subscriptionStartedAt: currentPeriodStart,
+        }
       });
 
       return res.status(200).json({ message: "Free plan activated", free: true });
     }
 
     if (!effectivePrice || Number(effectivePrice) <= 0) {
-      console.error("[createRazorpayOrder] plan price not configured", { planId: plan.id, dbPrice: plan.priceInr, envFallback: getFallbackPriceForPlan(plan.id) });
-      return res.status(400).json({ message: "Plan price not configured", plan: { id: plan.id, priceInr: plan.priceInr, fallback: getFallbackPriceForPlan(plan.id) } });
+      return res.status(400).json({ message: "Plan price not configured" });
     }
 
-    const user = await User.findById(req.user.id).select("name email phone");
+    const user = await prisma.user.findUnique({
+      where: { id: numericUserId },
+      select: { name: true, email: true, phone: true }
+    });
     if (!user) return res.status(404).json({ message: "User not found" });
 
     const api = razorpayApi();
@@ -419,7 +462,7 @@ exports.createRazorpayOrder = async (req, res) => {
       currency: plan.currency || getDefaultCurrency(),
       receipt: shortReceipt,
       notes: {
-        userId: String(req.user.id),
+        userId: String(numericUserId),
         planId: String(plan.id),
       },
       payment_capture: 1,
@@ -429,23 +472,32 @@ exports.createRazorpayOrder = async (req, res) => {
     const order = resp && resp.data ? resp.data : null;
     if (!order || !order.id) return res.status(500).json({ message: "Failed to create order" });
 
-    // Record a pending subscription row so UI / admin can see pending payment
+    // Record a pending subscription row
     try {
-      await Subscription.findOneAndUpdate(
-        { userId: req.user.id, provider: "razorpay", razorpayPaymentLinkId: null },
-        {
-          $setOnInsert: {
-            userId: req.user.id,
-            provider: "razorpay",
-            status: "pending",
-            metadata: { createdBy: "order" },
-          },
-          $set: { planId: plan.id, "metadata.razorpayOrderId": String(order.id) },
-        },
-        { upsert: true, new: true }
-      );
+      const lastSub = await prisma.subscription.findFirst({
+        where: { userId: numericUserId, provider: "razorpay", razorpayPaymentLinkId: null },
+        orderBy: { createdAt: 'desc' }
+      });
+
+      const subPayload = {
+        userId: numericUserId,
+        provider: "razorpay",
+        status: "pending",
+        planId: plan.id,
+        metadata: { createdBy: "order", razorpayOrderId: String(order.id) }
+      };
+
+      if (lastSub) {
+        await prisma.subscription.update({
+          where: { id: lastSub.id },
+          data: subPayload
+        });
+      } else {
+        await prisma.subscription.create({
+          data: subPayload
+        });
+      }
     } catch (e) {
-      // non-fatal
       console.error("Failed to upsert pending subscription", e.message || e);
     }
 
@@ -463,7 +515,6 @@ exports.createRazorpayOrder = async (req, res) => {
   }
 };
 
-// Verify payment (called by client after successful checkout) and activate subscription
 exports.verifyRazorpayPayment = async (req, res) => {
   try {
     const { razorpay_payment_id, razorpay_order_id, razorpay_signature, planId } = req.body || {};
@@ -471,42 +522,54 @@ exports.verifyRazorpayPayment = async (req, res) => {
       return res.status(400).json({ message: "Missing payment verification parameters" });
     }
 
-    // Verify signature (order_id|payment_id with secret) as per Razorpay docs
     const { keySecret } = getRazorpayKeys();
     const expected = crypto.createHmac("sha256", keySecret).update(`${razorpay_order_id}|${razorpay_payment_id}`).digest("hex");
     if (String(expected) !== String(razorpay_signature)) {
       return res.status(400).json({ message: "Signature verification failed" });
     }
 
-    // At this point payment is verified. Activate subscription for the user.
-    const userId = String(req.user.id);
+    const numericUserId = parseInt(req.user.id);
+    if (isNaN(numericUserId)) return res.status(401).json({ message: "Invalid user session" });
+
     const plan = await getPlanById(planId);
     if (!plan || plan.active === false) return res.status(400).json({ message: "Invalid planId" });
 
-    // compute period
     const now = new Date();
     const currentPeriodStart = now;
     const currentPeriodEnd = new Date(now.getTime() + (Number(plan.durationDays || 30) * 24 * 60 * 60 * 1000));
 
-    await Subscription.findOneAndUpdate(
-      { userId, provider: "razorpay" },
-      {
-        $set: {
-          userId,
-          provider: "razorpay",
-          planId: plan.id,
-          status: "active",
-          currentPeriodStart,
-          currentPeriodEnd,
-          razorpayPaymentId: String(razorpay_payment_id),
-          metadata: { verifiedAt: new Date().toISOString(), via: "manual_verify" },
-        },
-      },
-      { upsert: true, new: true }
-    );
+    // Update subscription
+    const existingSub = await prisma.subscription.findFirst({
+      where: { userId: numericUserId, provider: "razorpay" },
+      orderBy: { createdAt: 'desc' }
+    });
 
-    // Read back the subscription we just upserted
-    const subDoc = await Subscription.findOne({ userId, provider: "razorpay" }).sort({ createdAt: -1 }).lean();
+    const subPayload = {
+      userId: numericUserId,
+      provider: "razorpay",
+      planId: plan.id,
+      status: "active",
+      currentPeriodStart,
+      currentPeriodEnd,
+      razorpayPaymentId: String(razorpay_payment_id),
+      metadata: { verifiedAt: new Date().toISOString(), via: "manual_verify" }
+    };
+
+    if (existingSub) {
+      await prisma.subscription.update({
+        where: { id: existingSub.id },
+        data: subPayload
+      });
+    } else {
+      await prisma.subscription.create({
+        data: subPayload
+      });
+    }
+
+    const subDoc = await prisma.subscription.findFirst({
+      where: { userId: numericUserId, provider: "razorpay" },
+      orderBy: { createdAt: 'desc' }
+    });
 
     const userUpdate = {
       subscriptionStatus: "active",
@@ -515,7 +578,10 @@ exports.verifyRazorpayPayment = async (req, res) => {
       subscriptionStartedAt: currentPeriodStart,
     };
 
-    await User.findByIdAndUpdate(userId, userUpdate);
+    await prisma.user.update({
+      where: { id: numericUserId },
+      data: userUpdate
+    });
 
     return res.status(200).json({ ok: true, message: "Subscription activated", subscription: subDoc, user: userUpdate });
   } catch (err) {
@@ -524,21 +590,19 @@ exports.verifyRazorpayPayment = async (req, res) => {
   }
 };
 
-// (cancelSubscription removed)
-
 exports.listAllSubscriptions = async (_req, res) => {
-  const items = await Subscription.find()
-    .populate("userId", "email")
-    .sort({ createdAt: -1 })
-    .limit(500)
-    .lean();
+  const items = await prisma.subscription.findMany({
+    include: { user: true },
+    orderBy: { createdAt: 'desc' },
+    take: 500
+  });
 
   const out = items.map((it) => {
-    const user = it.userId || null;
+    const user = it.user || null;
     return {
-      id: it._id,
-      userId: user && user._id ? String(user._id) : null,
-      userEmail: user && user.email ? String(user.email) : null,
+      id: String(it.id),
+      userId: user ? String(user.id) : null,
+      userEmail: user ? String(user.email) : null,
       provider: it.provider || null,
       planId: it.planId || null,
       status: it.status || null,
@@ -554,11 +618,12 @@ exports.listAllSubscriptions = async (_req, res) => {
   return res.status(200).json(out);
 };
 
-
 // List all plans (admin)
 exports.listPlansAdmin = async (_req, res) => {
   await ensureDefaultPlans();
-  const items = await Plan.find().sort({ durationDays: 1 }).lean();
+  const items = await prisma.subscriptionPlan.findMany({
+    orderBy: { durationDays: 'asc' }
+  });
   return res.status(200).json(
     items.map((p) => ({
       id: p.id,
@@ -579,34 +644,35 @@ exports.upsertPlansAdmin = async (req, res) => {
 
   await ensureDefaultPlans();
 
-  const ops = [];
   for (const raw of arr) {
     if (!raw) continue;
     const id = String(raw.id || "").trim();
     if (!id) continue;
 
-    const update = {
-      label: raw.label !== undefined ? String(raw.label || "").trim() || id : undefined,
-      currency: raw.currency !== undefined ? String(raw.currency || "INR").trim() || "INR" : undefined,
-      priceInr: raw.priceInr !== undefined ? toNumber(raw.priceInr) : undefined,
-      durationDays: raw.durationDays !== undefined ? Math.trunc(toNumber(raw.durationDays)) : undefined,
-      active: raw.active !== undefined ? Boolean(raw.active) : undefined,
-    };
+    const update = {};
+    if (raw.label !== undefined) update.label = String(raw.label || "").trim() || id;
+    if (raw.currency !== undefined) update.currency = String(raw.currency || "INR").trim() || "INR";
+    if (raw.priceInr !== undefined) update.priceInr = toNumber(raw.priceInr);
+    if (raw.durationDays !== undefined) update.durationDays = Math.trunc(toNumber(raw.durationDays));
+    if (raw.active !== undefined) update.active = Boolean(raw.active);
 
-    Object.keys(update).forEach((k) => update[k] === undefined && delete update[k]);
-    ops.push({
-      updateOne: {
-        filter: { id },
-        update: { $set: update, $setOnInsert: { id } },
-        upsert: true,
-      },
+    await prisma.subscriptionPlan.upsert({
+      where: { id },
+      update: update,
+      create: {
+        id,
+        label: update.label || id,
+        currency: update.currency || "INR",
+        priceInr: update.priceInr || 0,
+        durationDays: update.durationDays || 30,
+        active: update.active !== false
+      }
     });
   }
 
-  if (ops.length === 0) return res.status(400).json({ message: "No valid plans to update" });
-  await Plan.bulkWrite(ops);
-
-  const items = await Plan.find().sort({ durationDays: 1 }).lean();
+  const items = await prisma.subscriptionPlan.findMany({
+    orderBy: { durationDays: 'asc' }
+  });
   return res.status(200).json(
     items.map((p) => ({
       id: p.id,
@@ -625,15 +691,20 @@ exports.createPlanAdmin = async (req, res) => {
   if (!id || !label || !durationDays) {
     return res.status(400).json({ message: "Missing required fields (id, label, durationDays)" });
   }
-  const exists = await Plan.findOne({ id: String(id).trim() });
+  const exists = await prisma.subscriptionPlan.findUnique({
+    where: { id: String(id).trim() }
+  });
   if (exists) return res.status(400).json({ message: "Plan with this id already exists" });
-  const plan = await Plan.create({
-    id: String(id).trim(),
-    label: String(label).trim(),
-    priceInr: toNumber(priceInr),
-    durationDays: Math.trunc(toNumber(durationDays)),
-    currency: String(currency || "INR").trim(),
-    active: active !== false,
+
+  const plan = await prisma.subscriptionPlan.create({
+    data: {
+      id: String(id).trim(),
+      label: String(label).trim(),
+      priceInr: toNumber(priceInr),
+      durationDays: Math.trunc(toNumber(durationDays)),
+      currency: String(currency || "INR").trim(),
+      active: active !== false,
+    }
   });
   return res.status(201).json(plan);
 };
@@ -642,8 +713,12 @@ exports.createPlanAdmin = async (req, res) => {
 exports.deletePlanAdmin = async (req, res) => {
   const { id } = req.params;
   if (!id) return res.status(400).json({ message: "Missing plan id" });
-  const plan = await Plan.findOneAndDelete({ id: String(id).trim() });
-  if (!plan) return res.status(404).json({ message: "Plan not found" });
-  return res.status(200).json({ message: "Plan deleted" });
+  try {
+    await prisma.subscriptionPlan.delete({
+      where: { id: String(id).trim() }
+    });
+    return res.status(200).json({ message: "Plan deleted" });
+  } catch (e) {
+    return res.status(404).json({ message: "Plan not found" });
+  }
 };
-// (removed temporary force-activate helper)

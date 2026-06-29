@@ -1,0 +1,385 @@
+datasource db {
+  provider = "postgresql"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id                    Int            @id @default(autoincrement())
+  name                  String
+  email                 String         @unique
+  phone                 String?
+  password              String?
+  authProvider          String         @default("local") // local, google, facebook, apple
+  googleId              String?
+  facebookId            String?
+  appleSub              String?
+  role                  String         @default("user") // user, admin
+  isActive              Boolean        @default(true)
+  photo                 String?
+  dob                   String         @default("")
+  gender                String         @default("")
+  location              String         @default("")
+  preferredCity         String         @default("")
+  education             String         @default("")
+  profession            String         @default("")
+  germanLevel           String         @default("")
+  passport              String         @default("")
+  resetPasswordToken    String?
+  resetPasswordExpires  DateTime?
+  subscriptionStatus    String         @default("none")
+  subscriptionPlan      String?
+  subscriptionExpiresAt DateTime?
+  subscriptionStartedAt DateTime?
+  firstLoginAt          DateTime?
+  lastLoginAt           DateTime?
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+  
+  jobListings           JobListing[]
+  accommodations        Accommodation[]
+  foodGroceries         FoodGrocery[]
+  services              Service[]
+  subscriptions         Subscription[]
+  problemReports        ProblemReport[]
+  receivedNotifications Notification[] @relation("RecipientRelation")
+  sentNotifications     Notification[] @relation("SenderRelation")
+
+  @@map("users")
+}
+
+model JobListing {
+  id          Int      @id @default(autoincrement())
+  title       String
+  category    String   @default("Job")
+  companyName String?
+  companyLogo String?
+  location    String?
+  description String?
+  contact     String?
+  salary      String?
+  jobType     String   @default("Full Time") // Full Time, Part Time
+  requirements String?
+  benefits    String?
+  applyUrl    String?
+  status      String   @default("Active")
+  amenities   String[]
+  createdById Int?
+  createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  creatorType String   @default("admin") // admin, user
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("job_listings")
+}
+
+model Accommodation {
+  id                 Int       @id @default(autoincrement())
+  title              String
+  category           String    @default("Accommodation")
+  type               String?
+  address            String?
+  city               String?
+  state              String?
+  zipCode            String?
+  phone              String?
+  email              String?
+  website            String?
+  description        String?
+  rent               Float?
+  deposit            Float?
+  bedrooms           Int?
+  bathrooms          Int?
+  area               Float?
+  furnished          Boolean   @default(false)
+  petsAllowed        Boolean   @default(false)
+  parkingAvailable   Boolean   @default(false)
+  utilities          String?
+  availableFrom      DateTime?
+  image              String?
+  latitude           Float?
+  longitude          Float?
+  averageRating      Float     @default(0)
+  totalRatings       Int       @default(0)
+  ratingDistribution Json?
+  lastRatedAt        DateTime?
+  status             String    @default("Pending") // Active, Pending, Inactive, Rejected
+  featured           Boolean   @default(false)
+  createdById        Int?
+  createdBy          User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  creatorType        String    @default("admin") // admin, user
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  
+  // JSON columns to store MongoDB nested structures
+  rentDetails        Json?
+  propertyDetails    Json?
+  amenities          Json?
+  locationHighlights Json?
+  media              Json?
+  adminControls      Json?
+  contactPhone       String?
+
+  @@map("accommodations")
+}
+
+model FoodGrocery {
+  id                 Int       @id @default(autoincrement())
+  title              String
+  category           String    @default("Food") // Food, Grocery
+  subCategory        String?
+  type               String?
+  location           String?
+  address            String?
+  city               String?
+  state              String?
+  zipCode            String?
+  phone              String?
+  email              String?
+  website            String?
+  description        String?
+  openingHours       String?
+  priceRange         String?
+  rating             Float     @default(0)
+  cuisine            String[]
+  specialties        String[]
+  deliveryAvailable  Boolean   @default(false)
+  takeoutAvailable   Boolean   @default(false)
+  dineInAvailable    Boolean   @default(false)
+  cateringAvailable  Boolean   @default(false)
+  image              String?
+  latitude           Float?
+  longitude          Float?
+  averageRating      Float     @default(0)
+  totalRatings       Int       @default(0)
+  ratingDistribution Json?
+  lastRatedAt        DateTime?
+  status             String    @default("Pending") // Active, Pending, Inactive, Rejected
+  featured           Boolean   @default(false)
+  verified           Boolean   @default(false)
+  createdById        Int?
+  createdBy          User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  creatorType        String    @default("admin") // admin, user
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@map("food_groceries")
+}
+
+model Service {
+  id                 Int       @id @default(autoincrement())
+  title              String?
+  providerName       String?
+  category           String    @default("Services")
+  description        String?
+  location           String?
+  latitude           Float?
+  longitude          Float?
+  address            String?
+  phone              String?
+  whatsapp           String?
+  email              String?
+  website            String?
+  images             String[]
+  amenities          String[]
+  rating             Float     @default(0)
+  ratingCount        Int       @default(0)
+  averageRating      Float     @default(0)
+  totalRatings       Int       @default(0)
+  ratingDistribution Json?
+  lastRatedAt        DateTime?
+  priceRange         String?
+  isActive           Boolean   @default(true)
+  serviceName        String?
+  serviceType        String?
+  provider           String?
+  city               String?
+  area               String?
+  postalCode         String?
+  contactPhone       String?
+  status             String    @default("Active") // Active, Pending, Inactive, Rejected
+  featured           Boolean   @default(false)
+  verified           Boolean   @default(false)
+  createdById        Int?
+  createdBy          User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  creatorType        String    @default("admin") // admin, user
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@map("services")
+}
+
+model SubscriptionPlan {
+  id           String         @id
+  label        String
+  currency     String         @default("INR")
+  priceInr     Float          @default(0)
+  durationDays Int
+  active       Boolean        @default(true)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  subscribers  Subscription[]
+
+  @@map("subscription_plans")
+}
+
+model Subscription {
+  id                    Int               @id @default(autoincrement())
+  userId                Int
+  user                  User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider              String            @default("razorpay")
+  planId                String?
+  plan                  SubscriptionPlan? @relation(fields: [planId], references: [id], onDelete: SetNull)
+  status                String            @default("none")
+  currentPeriodStart    DateTime?
+  currentPeriodEnd      DateTime?
+  razorpayPaymentLinkId String?
+  razorpayPaymentId     String?
+  metadata              Json?
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+
+  @@map("subscriptions")
+}
+
+model UniversalRating {
+  id         Int      @id @default(autoincrement())
+  userId     String
+  userName   String   @default("Anonymous User")
+  userType   String   @default("guest")
+  entityId   Int
+  entityType String
+  rating     Int
+  review     String   @default("")
+  deviceInfo Json?
+  status     String   @default("active")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([entityId, entityType])
+  @@map("universal_ratings")
+}
+
+model ProblemReport {
+  id          Int      @id @default(autoincrement())
+  subject     String
+  description String
+  userId      Int
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userName    String   @default("")
+  userEmail   String   @default("")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("problem_reports")
+}
+
+model Notification {
+  id          Int      @id @default(autoincrement())
+  recipientId Int
+  recipient   User     @relation("RecipientRelation", fields: [recipientId], references: [id], onDelete: Cascade)
+  senderId    Int?
+  sender      User?    @relation("SenderRelation", fields: [senderId], references: [id], onDelete: SetNull)
+  type        String // like_received, like_sent, listing_activated
+  title       String
+  message     String
+  senderName  String?
+  senderPhoto String?
+  data        Json? // Mixed payload object
+  read        Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("notifications")
+}
+
+model EmailVerification {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  code      String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("email_verifications")
+}
+
+model ContentAdmin {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique
+  value     String   @default("")
+  updatedAt DateTime @updatedAt
+
+  @@map("content_management_admin")
+}
+
+model PwLog {
+  id         Int      @id @default(autoincrement())
+  adminId    Int?
+  adminEmail String?
+  changedAt  DateTime @default(now())
+  note       String   @default("Password updated by admin")
+
+  @@map("password_setting_admin")
+}
+
+model HelpCenter {
+  id        Int      @id @default(autoincrement())
+  question  String
+  answer    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("help_center")
+}
+
+model Guide {
+  id                   Int      @id @default(autoincrement())
+  title                String
+  category             String?
+  readTime             Int?
+  description          String?
+  keyPoints            String[]
+  content              String?
+  officialWebsites     String?
+  communityDiscussions String?
+  author               String   @default("German Bharatham Team")
+  date                 String
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@map("community_guides")
+}
+
+model Category {
+  id          Int              @id @default(autoincrement())
+  name        String
+  description String           @default("")
+  icon        String           @default("📋")
+  status      String           @default("active")
+  listings    GenericListing[]
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@map("categories")
+}
+
+model GenericListing {
+  id           Int      @id @default(autoincrement())
+  categoryId   Int
+  category     Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  categoryName String
+  title        String
+  description  String   @default("")
+  contactPhone String   @default("")
+  city         String   @default("")
+  area         String   @default("")
+  images       String[]
+  status       String   @default("active")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("generic_listings")
+}

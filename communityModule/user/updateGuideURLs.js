@@ -1,14 +1,8 @@
-const mongoose = require("mongoose");
-const Guide = require("./models/Guide");
+const prisma = require("../../config/prisma");
 require("dotenv").config();
 
 const updateGuidesWithURLs = async () => {
   try {
-    // Connect to MongoDB
-    await mongoose.connect(process.env.MONGO_URI);
-    console.log("MongoDB Connected ✅");
-
-    // URLs for each guide
     const guideURLs = [
       {
         title: "Complete Guide to German Registration - Anmeldung",
@@ -42,21 +36,19 @@ const updateGuidesWithURLs = async () => {
       }
     ];
 
-    // Update each guide with URLs
     for (const guideData of guideURLs) {
-      await Guide.findOneAndUpdate(
-        { title: guideData.title },
-        {
+      await prisma.guide.updateMany({
+        where: { title: guideData.title },
+        data: {
           officialWebsites: guideData.officialWebsites,
           communityDiscussions: guideData.communityDiscussions
         }
-      );
+      });
     }
 
-    console.log("✅ Guides updated with URLs successfully!");
+    console.log("✅ Guides updated with URLs successfully in PostgreSQL!");
 
-    // Display updated guides
-    const guides = await Guide.find();
+    const guides = await prisma.guide.findMany({});
     guides.forEach(guide => {
       console.log(`\n${guide.title}`);
       console.log(`  - Official: ${guide.officialWebsites}`);

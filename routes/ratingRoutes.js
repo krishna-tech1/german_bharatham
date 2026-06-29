@@ -1,5 +1,6 @@
 const express = require("express");
 const router = express.Router();
+const prisma = require("../config/prisma");
 const RatingService = require("../services/ratingService");
 
 // Middleware to handle guest users
@@ -38,16 +39,33 @@ const protectOrGuest = async (req, res, next) => {
 
     // For regular tokens, verify JWT
     const jwt = require("jsonwebtoken");
-    const User = require("../userModule/user/models/User");
     
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findById(decoded.id).select("-password");
+    const numericUserId = parseInt(decoded.id);
+
+    if (isNaN(numericUserId)) {
+      const guestId = req.headers['x-guest-id'] || `guest_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      req.user = {
+        id: guestId,
+        name: req.headers['x-user-name'] || 'Guest User',
+        isGuest: true
+      };
+      return next();
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: numericUserId }
+    });
 
     if (!user) {
       return res.status(401).json({ message: "User not found" });
     }
 
-    req.user = user;
+    req.user = {
+      ...user,
+      id: String(user.id),
+      _id: String(user.id)
+    };
     next();
   } catch (error) {
     // If JWT fails, treat as guest
@@ -64,7 +82,6 @@ const protectOrGuest = async (req, res, next) => {
 // @route   POST /api/ratings/submit
 // @desc    Submit a rating for any entity
 // @access  Public (Guest or Authenticated)
-// @body    { entityId, entityType, rating, review }
 router.post("/submit", protectOrGuest, async (req, res) => {
   try {
     const { entityId, entityType, rating, review } = req.body;
@@ -113,8 +130,6 @@ router.post("/submit", protectOrGuest, async (req, res) => {
 
 // @route   GET /api/ratings/:entityType/:entityId
 // @desc    Get all ratings for an entity with pagination
-// @access  Public
-// @query   page, limit, sortBy, sortOrder
 router.get("/:entityType/:entityId", async (req, res) => {
   try {
     const { entityType, entityId } = req.params;
@@ -144,7 +159,6 @@ router.get("/:entityType/:entityId", async (req, res) => {
 
 // @route   GET /api/ratings/:entityType/:entityId/stats
 // @desc    Get rating statistics for an entity
-// @access  Public
 router.get("/:entityType/:entityId/stats", async (req, res) => {
   try {
     const { entityType, entityId } = req.params;
@@ -167,7 +181,6 @@ router.get("/:entityType/:entityId/stats", async (req, res) => {
 
 // @route   GET /api/ratings/:entityType/:entityId/user
 // @desc    Get current user's rating for an entity
-// @access  Public (Guest or Authenticated)
 router.get("/:entityType/:entityId/user", protectOrGuest, async (req, res) => {
   try {
     const { entityType, entityId } = req.params;
@@ -192,16 +205,11 @@ router.get("/:entityType/:entityId/user", protectOrGuest, async (req, res) => {
 
 // @route   DELETE /api/ratings/:ratingId
 // @desc    Delete a rating (admin only)
-// @access  Admin
 router.delete("/:ratingId", async (req, res) => {
   try {
-    // TODO: Add admin authentication middleware
     const { ratingId } = req.params;
-
     const result = await RatingService.deleteRating(ratingId);
-
     res.json(result);
-
   } catch (error) {
     console.error("Error deleting rating:", error);
     res.status(500).json({ 

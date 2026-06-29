@@ -1,21 +1,42 @@
 const express = require("express");
 const router = express.Router();
-const Service = require("./admin/model/Service");
+const prisma = require("../config/prisma");
+
+// Helper to map PostgreSQL Prisma service to match frontend _id expectations
+const mapService = (item) => {
+  if (!item) return null;
+  return {
+    ...item,
+    _id: String(item.id),
+  };
+};
 
 // GET ALL ACTIVE SERVICES (No auth required for users)
 router.get("/", async (req, res) => {
   try {
     const { city, serviceType, provider } = req.query;
-    // Support both legacy and newer status values.
-    // Admin UI can save as 'active' while older docs may store 'Active'.
-    const filter = { status: { $in: ["Active", "active"] } };
     
-    if (city) filter.city = { $regex: city, $options: 'i' };
-    if (serviceType) filter.serviceType = { $regex: serviceType, $options: 'i' };
-    if (provider) filter.provider = { $regex: provider, $options: 'i' };
+    const where = {
+      status: { in: ["Active", "active"] }
+    };
     
-    const data = await Service.find(filter).sort({ createdAt: -1 }).lean();
-    res.json({ data, count: data.length });
+    if (city) {
+      where.city = { contains: city, mode: 'insensitive' };
+    }
+    if (serviceType) {
+      where.serviceType = { contains: serviceType, mode: 'insensitive' };
+    }
+    if (provider) {
+      where.provider = { contains: provider, mode: 'insensitive' };
+    }
+    
+    const data = await prisma.service.findMany({
+      where,
+      orderBy: { createdAt: 'desc' }
+    });
+    
+    const mapped = data.map(mapService);
+    res.json({ data: mapped, count: mapped.length });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }
@@ -24,9 +45,14 @@ router.get("/", async (req, res) => {
 // GET ONE SERVICE BY ID
 router.get("/:id", async (req, res) => {
   try {
-    const doc = await Service.findById(req.params.id);
+    const numericId = parseInt(req.params.id);
+    if (isNaN(numericId)) return res.status(400).json({ message: 'Invalid ID format' });
+
+    const doc = await prisma.service.findUnique({
+      where: { id: numericId }
+    });
     if (!doc) return res.status(404).json({ message: 'Service not found' });
-    res.json(doc);
+    res.json(mapService(doc));
   } catch (e) {
     res.status(500).json({ message: e.message });
   }

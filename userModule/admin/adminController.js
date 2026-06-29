@@ -1,4 +1,4 @@
-const User = require("../user/models/User");
+const prisma = require("../../config/prisma");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 
@@ -12,8 +12,8 @@ exports.adminLogin = async (req, res) => {
     // 1️⃣ Check if user exists
     console.log(`🔍 [DB QUERY] finding admin user with email: ${normalizedEmail}`);
     const queryStart = Date.now();
-    const user = await User.findOne({ email: normalizedEmail });
-    console.log(`✅ [DB RESULT] findOne returned ${user ? 1 : 0} documents in ${Date.now() - queryStart}ms`);
+    const user = await prisma.user.findUnique({ where: { email: normalizedEmail } });
+    console.log(`✅ [DB RESULT] findUnique completed in ${Date.now() - queryStart}ms`);
 
     if (!user) {
       return res.status(400).json({ message: "Invalid credentials" });
@@ -37,8 +37,9 @@ exports.adminLogin = async (req, res) => {
 
     // 4️⃣ Generate token
     const jwtSecret = process.env.JWT_SECRET || "dev_jwt_secret";
+    // Keep JWT payload in string format of user.id to be backward compatible
     const token = jwt.sign(
-      { id: user._id, role: user.role },
+      { id: String(user.id), role: user.role },
       jwtSecret,
       { expiresIn: "1d" }
     );

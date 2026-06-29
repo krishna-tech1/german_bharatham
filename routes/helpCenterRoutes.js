@@ -1,10 +1,7 @@
 const express = require('express');
-const mongoose = require('mongoose');
+const prisma = require("../config/prisma");
 
 const router = express.Router();
-
-const helpCenterSchema = new mongoose.Schema({}, { strict: false, collection: 'help center' });
-const HelpCenter = mongoose.models.HelpCenter || mongoose.model('HelpCenter', helpCenterSchema);
 
 const DEFAULT_FAQS = [
   {
@@ -50,16 +47,17 @@ const normaliseFaq = (item) => {
 
 router.get('/', async (_req, res) => {
   try {
-    let docs = await HelpCenter.find({}).lean();
+    let docs = await prisma.helpCenter.findMany({});
 
     if (!docs.length) {
-      await HelpCenter.insertMany(DEFAULT_FAQS);
-      docs = await HelpCenter.find({}).lean();
+      await prisma.helpCenter.createMany({ data: DEFAULT_FAQS });
+      docs = await prisma.helpCenter.findMany({});
     }
 
     const faqs = [];
 
     docs.forEach((doc) => {
+      // Compatibility with old structures containing nested faqs arrays
       if (Array.isArray(doc?.faqs)) {
         doc.faqs.forEach((f) => {
           const mapped = normaliseFaq(f);

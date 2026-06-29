@@ -1,7 +1,5 @@
 const crypto = require("crypto");
-const Subscription = require("./models/Subscription");
-const User = require("../userModule/user/models/User");
-const Plan = require("./models/Plan");
+const prisma = require("../config/prisma");
 
 const safeJson = (value) => {
   try {
@@ -12,7 +10,6 @@ const safeJson = (value) => {
 };
 
 const verifyWebhookSignature = ({ rawBody, signature, secret }) => {
-  // Razorpay signs the payload using HMAC-SHA256 and encodes the signature in base64.
   const hmac = crypto.createHmac("sha256", secret);
   hmac.update(rawBody);
   const expected = hmac.digest("base64");
@@ -47,17 +44,23 @@ const ensureDefaultPlans = async () => {
     { id: "1y", label: "1 Year", durationDays: 365, priceInr: toNumber(process.env.SUBSCRIPTIONS_YEARLY_PRICE_INR), currency },
   ];
 
-  const existing = await Plan.find({ id: { $in: defaults.map((d) => d.id) } }).select("id").lean();
-  const existingIds = new Set(existing.map((e) => e.id));
-  const toCreate = defaults.filter((d) => !existingIds.has(d.id));
-  if (toCreate.length > 0) {
-    await Plan.insertMany(toCreate.map((p) => ({ ...p, active: true })), { ordered: false });
+  for (const plan of defaults) {
+    await prisma.subscriptionPlan.upsert({
+      where: { id: plan.id },
+      update: {},
+      create: { ...plan, active: true }
+    });
   }
 };
 
 const activate = async ({ userId, planId, providerIds, eventType }) => {
   await ensureDefaultPlans();
-  const plan = await Plan.findOne({ id: String(planId || "").trim() }).lean();
+  const numericUserId = parseInt(userId);
+  if (isNaN(numericUserId)) return { ok: false, reason: "Invalid userId" };
+
+  const plan = await prisma.subscriptionPlan.findUnique({
+    where: { id: String(planId || "").trim() }
+  });
   if (!plan || plan.active === false) {
     return { ok: false, reason: "Unknown planId" };
   }
@@ -66,8 +69,8 @@ const activate = async ({ userId, planId, providerIds, eventType }) => {
   const currentPeriodStart = now;
   const currentPeriodEnd = addDays(now, plan.durationDays || 30);
 
-  const update = {
-    userId,
+  const updatePayload = {
+    userId: numericUserId,
     provider: "razorpay",
     planId: plan.id,
     status: "active",
@@ -77,29 +80,43 @@ const activate = async ({ userId, planId, providerIds, eventType }) => {
   };
 
   if (providerIds && providerIds.razorpayPaymentLinkId) {
-    update.razorpayPaymentLinkId = String(providerIds.razorpayPaymentLinkId);
+    updatePayload.razorpayPaymentLinkId = String(providerIds.razorpayPaymentLinkId);
   }
   if (providerIds && providerIds.razorpayPaymentId) {
-    update.razorpayPaymentId = String(providerIds.razorpayPaymentId);
+    updatePayload.razorpayPaymentId = String(providerIds.razorpayPaymentId);
   }
 
-  await Subscription.findOneAndUpdate(
-    {
-      userId,
+  // Find last subscription or create new
+  const lastSub = await prisma.subscription.findFirst({
+    where: {
+      userId: numericUserId,
       provider: "razorpay",
       ...(providerIds && providerIds.razorpayPaymentLinkId
         ? { razorpayPaymentLinkId: String(providerIds.razorpayPaymentLinkId) }
         : {}),
     },
-    { $set: update },
-    { upsert: true, new: true }
-  );
+    orderBy: { createdAt: 'desc' }
+  });
 
-  await User.findByIdAndUpdate(userId, {
-    subscriptionStatus: "active",
-    subscriptionPlan: plan.id,
-    subscriptionExpiresAt: currentPeriodEnd,
-    subscriptionStartedAt: currentPeriodStart,
+  if (lastSub) {
+    await prisma.subscription.update({
+      where: { id: lastSub.id },
+      data: updatePayload
+    });
+  } else {
+    await prisma.subscription.create({
+      data: updatePayload
+    });
+  }
+
+  await prisma.user.update({
+    where: { id: numericUserId },
+    data: {
+      subscriptionStatus: "active",
+      subscriptionPlan: plan.id,
+      subscriptionExpiresAt: currentPeriodEnd,
+      subscriptionStartedAt: currentPeriodStart,
+    }
   });
 
   return { ok: true };
@@ -127,7 +144,6 @@ module.exports = async function razorpayWebhook(req, res) {
   try {
     const eventType = event && event.event ? String(event.event) : "";
 
-    // We primarily rely on payment_link.paid because our flow uses Payment Links.
     if (eventType === "payment_link.paid" || eventType === "payment.captured") {
       const paymentLink = event?.payload?.payment_link?.entity;
       const payment = event?.payload?.payment?.entity;

@@ -1,34 +1,40 @@
 const express = require("express");
 const router = express.Router();
-// Use the same model as the admin so schema stays consistent
-const Job = require("./models/jobModel");
+const prisma = require("../config/prisma");
 
 // GET ALL VISIBLE JOBS (No auth required for users)
-// Returns all jobs that are not explicitly Inactive
 router.get("/", async (req, res) => {
   try {
     const { city, jobType, company, companyName } = req.query;
 
-    // Only show jobs with active status (case-insensitive)
-    const filter = { status: { $regex: /^active$/i } };
+    const where = {
+      status: { equals: 'Active', mode: 'insensitive' }
+    };
 
-    if (city) filter.location = { $regex: city, $options: 'i' };
-    if (jobType) filter.jobType = { $regex: jobType, $options: 'i' };
+    if (city) {
+      where.location = { contains: city, mode: 'insensitive' };
+    }
+    if (jobType) {
+      where.jobType = { contains: jobType, mode: 'insensitive' };
+    }
     if (company || companyName) {
       const q = company || companyName;
-      filter['$or'] = [
-        { company: { $regex: q, $options: 'i' } },
-        { companyName: { $regex: q, $options: 'i' } },
+      where.OR = [
+        { companyName: { contains: q, mode: 'insensitive' } }
       ];
     }
 
-    const data = await Job.find(filter).sort({ createdAt: -1 }).lean();
+    const data = await prisma.jobListing.findMany({
+      where: where,
+      orderBy: { createdAt: 'desc' }
+    });
 
     // Normalize field names so Flutter always gets `company` and `companyLogo`
     const normalized = data.map(j => ({
       ...j,
-      company: j.company || j.companyName || '',
-      city: j.city || j.location || '',
+      _id: String(j.id), // Add _id for mobile/frontend compatibility
+      company: j.companyName || '',
+      city: j.location || '',
       requirements: Array.isArray(j.requirements)
         ? j.requirements
         : (j.requirements ? j.requirements.split(/[,;\n]/).map(s => s.trim()).filter(Boolean) : []),
@@ -46,9 +52,17 @@ router.get("/", async (req, res) => {
 // GET ONE JOB BY ID
 router.get("/:id", async (req, res) => {
   try {
-    const doc = await Job.findById(req.params.id);
+    const numericId = parseInt(req.params.id);
+    if (isNaN(numericId)) return res.status(400).json({ message: 'Invalid ID format' });
+
+    const doc = await prisma.jobListing.findUnique({
+      where: { id: numericId }
+    });
     if (!doc) return res.status(404).json({ message: 'Job not found' });
-    res.json(doc);
+    res.json({
+      ...doc,
+      _id: String(doc.id) // Add _id for mobile/frontend compatibility
+    });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }

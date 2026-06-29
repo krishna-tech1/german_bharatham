@@ -1,52 +1,69 @@
 const express = require("express");
 const router = express.Router();
-const Accommodation = require("./accomodation");
+const prisma = require("../config/prisma");
 const { notifyListingActivated } = require('../userModule/user/services/notificationService');
 
+// Helper to map PostgreSQL Prisma accommodation to match frontend expectations
+const mapAccommodation = (item) => {
+  if (!item) return null;
+  return {
+    ...item,
+    _id: String(item.id),
+  };
+};
+
+const adminCheck = (req, res, next) => {
+  if (!req.user || req.user.role !== "admin") {
+    return res.status(403).json({ message: "Admin access required" });
+  }
+  next();
+};
+
 // GET ALL (with stats) with optional pagination: ?page=1&limit=20
-router.get("/", async (req, res) => {
+router.get("/", adminCheck, async (req, res) => {
   const start = Date.now();
   console.log(`🚀 [START] GET /accommodation/admin/ called at ${new Date().toISOString()}`);
   try {
-    if (req.user.role !== "admin") {
-      return res.status(403).json({ message: "Admin access required" });
-    }
     // Pagination params
     const page = Math.max(1, parseInt(req.query.page) || 1);
-    const limit = Math.min(100, parseInt(req.query.limit) || 1);
+    const limit = Math.min(100, parseInt(req.query.limit) || 10);
     const skip = (page - 1) * limit;
 
     console.log(`📋 [PAGINATION] page=${page}, limit=${limit}, skip=${skip}`);
 
-    // Get total counts (lightweight)
+    // Get total counts
     console.log(`🔍 [DB QUERY] Fetching Accommodation count (all documents)`);
     const countStart = Date.now();
-    const totalCount = await Accommodation.countDocuments();
+    const totalCount = await prisma.accommodation.count();
     console.log(`✅ [DB RESULT] Accommodation count returned ${totalCount} total documents in ${Date.now() - countStart}ms`);
 
     console.log(`🔍 [DB QUERY] Fetching Accommodation count (active documents with title and city)`);
     const activeStart = Date.now();
-    const activeCount = await Accommodation.countDocuments({ 
-      title: { $exists: true, $ne: null },
-      city: { $exists: true, $ne: null }
+    const activeCount = await prisma.accommodation.count({
+      where: {
+        title: { not: "" },
+        city: { not: "" },
+        status: { equals: 'active', mode: 'insensitive' }
+      }
     });
     console.log(`✅ [DB RESULT] Accommodation active count returned ${activeCount} documents in ${Date.now() - activeStart}ms`);
 
     // Fetch paginated data
     console.log(`🔍 [DB QUERY] Fetching paginated Accommodation data - limit=${limit}, skip=${skip}`);
     const findStart = Date.now();
-    const accommodations = await Accommodation.find()
-      .select('-__v')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .lean();
-    console.log(`✅ [DB RESULT] Accommodation.find() returned ${(accommodations || []).length} documents in ${Date.now() - findStart}ms`);
+    const accommodations = await prisma.accommodation.findMany({
+      orderBy: { createdAt: 'desc' },
+      skip,
+      take: limit
+    });
+    console.log(`✅ [DB RESULT] findMany returned ${(accommodations || []).length} documents in ${Date.now() - findStart}ms`);
 
-    console.log(`📤 [RESPONSE] Sending 200 response with ${(accommodations || []).length} items after ${Date.now() - start}ms`);
+    const mappedData = accommodations.map(mapAccommodation);
+    console.log(`📤 [RESPONSE] Sending 200 response with ${mappedData.length} items after ${Date.now() - start}ms`);
+    
     res.status(200).json({
-      data: accommodations || [],
-      count: (accommodations || []).length,
+      data: mappedData,
+      count: mappedData.length,
       totalCount: totalCount || 0,
       page,
       limit,
@@ -59,18 +76,19 @@ router.get("/", async (req, res) => {
 });
 
 // GET ONE
-router.get("/:id", async (req, res) => {
+router.get("/:id", adminCheck, async (req, res) => {
   const start = Date.now();
   console.log(`🚀 [START] GET /accommodation/admin/:id called with id=${req.params.id} at ${new Date().toISOString()}`);
   try {
-    if (req.user.role !== "admin") {
-      return res.status(403).json({ message: "Admin access required" });
-    }
+    const numericId = parseInt(req.params.id);
+    if (isNaN(numericId)) return res.status(400).json({ message: "Invalid ID format" });
 
-    console.log(`🔍 [DB QUERY] Fetching Accommodation by ID: ${req.params.id}`);
+    console.log(`🔍 [DB QUERY] Fetching Accommodation by ID: ${numericId}`);
     const queryStart = Date.now();
-    const accommodation = await Accommodation.findById(req.params.id);
-    console.log(`✅ [DB RESULT] Accommodation.findById() ${accommodation ? 'found' : 'not found'} in ${Date.now() - queryStart}ms`);
+    const accommodation = await prisma.accommodation.findUnique({
+      where: { id: numericId }
+    });
+    console.log(`✅ [DB RESULT] findUnique ${accommodation ? 'found' : 'not found'} in ${Date.now() - queryStart}ms`);
     
     if (!accommodation) {
       console.log(`📤 [RESPONSE] Sending 404 response after ${Date.now() - start}ms`);
@@ -78,7 +96,7 @@ router.get("/:id", async (req, res) => {
     }
 
     console.log(`📤 [RESPONSE] Sending 200 response after ${Date.now() - start}ms`);
-    res.status(200).json(accommodation);
+    res.status(200).json(mapAccommodation(accommodation));
   } catch (error) {
     console.error(`❌ [ERROR] GET /accommodation/admin/:id failed: ${error.message} after ${Date.now() - start}ms`);
     res.status(500).json({ message: error.message });
@@ -86,14 +104,10 @@ router.get("/:id", async (req, res) => {
 });
 
 // CREATE
-router.post("/", async (req, res) => {
+router.post("/", adminCheck, async (req, res) => {
   const start = Date.now();
   console.log(`🚀 [START] POST /accommodation/admin/ called at ${new Date().toISOString()}`);
   try {
-    if (req.user.role !== "admin") {
-      return res.status(403).json({ message: "Admin access required" });
-    }
-
     const title = (req.body.title || '').trim();
     const city = (req.body.city || '').trim();
     const contactPhone = (req.body.contactPhone || '').trim();
@@ -107,114 +121,82 @@ router.post("/", async (req, res) => {
 
     console.log(`📝 [VALIDATION] Creating accommodation with title="${title}", city="${city}"`);
 
-    // Prepare payload with proper type conversions
-    const payload = {
-      title,
-      city,
-      description: req.body.description ? String(req.body.description).trim() : null,
-      propertyType: req.body.propertyType ? String(req.body.propertyType).trim() : null,
-      postalCode: req.body.postalCode ? String(req.body.postalCode).trim() : null,
-      address: req.body.address ? String(req.body.address).trim() : null,
-      latitude: req.body.latitude ? parseFloat(req.body.latitude) : null,
-      longitude: req.body.longitude ? parseFloat(req.body.longitude) : null,
-      
-      rentDetails: req.body.rentDetails ? {
-        coldRent: req.body.rentDetails.coldRent ? parseFloat(req.body.rentDetails.coldRent) : null,
-        warmRent: req.body.rentDetails.warmRent ? parseFloat(req.body.rentDetails.warmRent) : null,
-        additionalCosts: req.body.rentDetails.additionalCosts ? parseFloat(req.body.rentDetails.additionalCosts) : null,
-        deposit: req.body.rentDetails.deposit ? parseFloat(req.body.rentDetails.deposit) : null,
-        electricityIncluded: Boolean(req.body.rentDetails.electricityIncluded),
-        heatingIncluded: Boolean(req.body.rentDetails.heatingIncluded),
-        internetIncluded: Boolean(req.body.rentDetails.internetIncluded)
-      } : {},
-      
-      propertyDetails: req.body.propertyDetails ? {
-        sizeSqm: req.body.propertyDetails.sizeSqm ? parseFloat(req.body.propertyDetails.sizeSqm) : null,
-        bedrooms: req.body.propertyDetails.bedrooms ? parseInt(req.body.propertyDetails.bedrooms, 10) : null,
-        bathrooms: req.body.propertyDetails.bathrooms ? parseInt(req.body.propertyDetails.bathrooms, 10) : null,
-        totalFloors: req.body.propertyDetails.totalFloors ? parseInt(req.body.propertyDetails.totalFloors, 10) : null
-      } : {},
-      
-      amenities: req.body.amenities ? {
-        balcony: Boolean(req.body.amenities.balcony),
-        terrace: Boolean(req.body.amenities.terrace),
-        garden: Boolean(req.body.amenities.garden),
-        lift: Boolean(req.body.amenities.lift),
-        parking: Boolean(req.body.amenities.parking),
-        garage: Boolean(req.body.amenities.garage),
-        cellar: Boolean(req.body.amenities.cellar),
-        washingMachine: Boolean(req.body.amenities.washingMachine),
-        dishwasher: Boolean(req.body.amenities.dishwasher),
-        kitchen: Boolean(req.body.amenities.kitchen),
-        petsAllowed: Boolean(req.body.amenities.petsAllowed),
-        smokingAllowed: Boolean(req.body.amenities.smokingAllowed),
-        anmeldungPossible: Boolean(req.body.amenities.anmeldungPossible),
-        studentFriendly: Boolean(req.body.amenities.studentFriendly),
-        wheelchairAccessible: Boolean(req.body.amenities.wheelchairAccessible)
-      } : {},
-      
-      locationHighlights: req.body.locationHighlights ? {
-        nearUniversity: Boolean(req.body.locationHighlights.nearUniversity),
-        nearSupermarket: Boolean(req.body.locationHighlights.nearSupermarket),
-        nearHospital: Boolean(req.body.locationHighlights.nearHospital),
-        nearPublicTransport: Boolean(req.body.locationHighlights.nearPublicTransport),
-        ubahnDistanceMeters: req.body.locationHighlights.ubahnDistanceMeters ? parseInt(req.body.locationHighlights.ubahnDistanceMeters, 10) : null,
-        sbahnDistanceMeters: req.body.locationHighlights.sbahnDistanceMeters ? parseInt(req.body.locationHighlights.sbahnDistanceMeters, 10) : null,
-        busDistanceMeters: req.body.locationHighlights.busDistanceMeters ? parseInt(req.body.locationHighlights.busDistanceMeters, 10) : null
-      } : {},
-      
-      media: req.body.media ? {
-        images: Array.isArray(req.body.media.images) ? req.body.media.images : [],
-        videoUrl: req.body.media.videoUrl ? String(req.body.media.videoUrl).trim() : null,
-        floorPlan: req.body.media.floorPlan ? String(req.body.media.floorPlan).trim() : null
-      } : {},
-      
-      adminControls: req.body.adminControls ? {
-        viewsCount: req.body.adminControls.viewsCount ? parseInt(req.body.adminControls.viewsCount, 10) : 0,
-        favouritesCount: req.body.adminControls.favouritesCount ? parseInt(req.body.adminControls.favouritesCount, 10) : 0
-      } : {},
+    // Extract flat helper fields for SQL search/sort performance
+    const rentVal = req.body.rentDetails?.coldRent ? parseFloat(req.body.rentDetails.coldRent) : null;
+    const depositVal = req.body.rentDetails?.deposit ? parseFloat(req.body.rentDetails.deposit) : null;
+    const bedroomsVal = req.body.propertyDetails?.bedrooms ? parseInt(req.body.propertyDetails.bedrooms, 10) : null;
+    const bathroomsVal = req.body.propertyDetails?.bathrooms ? parseInt(req.body.propertyDetails.bathrooms, 10) : null;
+    const sizeVal = req.body.propertyDetails?.sizeSqm ? parseFloat(req.body.propertyDetails.sizeSqm) : null;
+    const isFurnished = req.body.amenities?.furnished === true;
+    const isPetsAllowed = req.body.amenities?.petsAllowed === true;
+    const isParking = req.body.amenities?.parking === true;
+    const firstImg = Array.isArray(req.body.media?.images) && req.body.media.images.length > 0 ? req.body.media.images[0] : null;
 
-      contactPhone: req.body.contactPhone ? String(req.body.contactPhone).trim() : null,
-      // New listings must be reviewed before going live.
-      status: 'pending'
-    };
-
-    console.log(`🔍 [DB QUERY] Creating new Accommodation document`);
-    const newAccommodation = new Accommodation(payload);
+    console.log(`🔍 [DB QUERY] Creating new Accommodation document in Prisma`);
     const saveStart = Date.now();
-    await newAccommodation.save();
-    console.log(`✅ [DB RESULT] Accommodation document saved with ID ${newAccommodation._id} in ${Date.now() - saveStart}ms`);
+    const newAccommodation = await prisma.accommodation.create({
+      data: {
+        title,
+        category: req.body.category || "Accommodation",
+        type: req.body.propertyType ? String(req.body.propertyType).trim() : null,
+        address: req.body.address ? String(req.body.address).trim() : null,
+        city,
+        state: req.body.state ? String(req.body.state).trim() : null,
+        zipCode: req.body.zipCode ? String(req.body.zipCode).trim() : null,
+        phone: contactPhone,
+        email: req.body.email ? String(req.body.email).trim() : null,
+        website: req.body.website ? String(req.body.website).trim() : null,
+        description: req.body.description ? String(req.body.description).trim() : null,
+        rent: rentVal,
+        deposit: depositVal,
+        bedrooms: bedroomsVal,
+        bathrooms: bathroomsVal,
+        area: sizeVal,
+        furnished: isFurnished,
+        petsAllowed: isPetsAllowed,
+        parkingAvailable: isParking,
+        utilities: req.body.utilities ? String(req.body.utilities).trim() : null,
+        availableFrom: req.body.availableFrom ? new Date(req.body.availableFrom) : null,
+        image: firstImg,
+        latitude: req.body.latitude ? parseFloat(req.body.latitude) : null,
+        longitude: req.body.longitude ? parseFloat(req.body.longitude) : null,
+        averageRating: 0,
+        totalRatings: 0,
+        ratingDistribution: req.body.ratingDistribution || {},
+        lastRatedAt: null,
+        status: 'pending',
+        featured: req.body.featured === true,
+        createdById: req.user ? req.user.id : null,
+        creatorType: req.body.creatorType || "admin",
+        
+        // JSON configurations
+        rentDetails: req.body.rentDetails || {},
+        propertyDetails: req.body.propertyDetails || {},
+        amenities: req.body.amenities || {},
+        locationHighlights: req.body.locationHighlights || {},
+        media: req.body.media || {},
+        adminControls: req.body.adminControls || {},
+        contactPhone,
+      }
+    });
 
-    // Verify accommodation was saved to MongoDB
-    console.log(`🔍 [DB QUERY] Verifying saved Accommodation with ID ${newAccommodation._id}`);
-    const verifyStart = Date.now();
-    const savedAccommodation = await Accommodation.findById(newAccommodation._id);
-    console.log(`✅ [DB RESULT] Accommodation verification ${savedAccommodation ? 'successful' : 'failed'} in ${Date.now() - verifyStart}ms`);
-    
-    if (!savedAccommodation) {
-      console.error(`❌ [ERROR] Failed to verify saved accommodation: ${newAccommodation._id}`);
-      return res.status(500).json({ message: "Accommodation save verification failed" });
-    }
-
-    console.log(`✅ Accommodation created successfully: ${savedAccommodation._id}`);
+    console.log(`✅ [DB RESULT] Accommodation document saved with ID ${newAccommodation.id} in ${Date.now() - saveStart}ms`);
     console.log(`📤 [RESPONSE] Sending 201 response after ${Date.now() - start}ms`);
-    res.status(201).json(savedAccommodation);
+    res.status(201).json(mapAccommodation(newAccommodation));
   } catch (error) {
     console.error(`❌ [ERROR] POST /accommodation/admin/ failed: ${error.message} after ${Date.now() - start}ms`);
-    if (error.name === "ValidationError") {
-      return res.status(400).json({ message: error.message });
-    }
     res.status(500).json({ message: error.message });
   }
 });
 
 // PATCH status
-router.patch('/:id/status', async (req, res) => {
+router.patch('/:id/status', adminCheck, async (req, res) => {
   const start = Date.now();
   console.log(`🚀 [START] PATCH /accommodation/admin/:id/status called with id=${req.params.id} at ${new Date().toISOString()}`);
   try {
-    if (req.user.role !== 'admin') return res.status(403).json({ message: 'Admin access required' });
-    
+    const numericId = parseInt(req.params.id);
+    if (isNaN(numericId)) return res.status(400).json({ message: "Invalid ID format" });
+
     const { status } = req.body;
     const normalised = status === 'inactive' ? 'disabled' : status;
     console.log(`📝 [VALIDATION] Status change requested: ${status} -> ${normalised}`);
@@ -222,36 +204,45 @@ router.patch('/:id/status', async (req, res) => {
     if (!['active', 'disabled', 'pending'].includes(normalised)) return res.status(400).json({ message: 'Invalid status' });
     const isActive = normalised === 'active';
 
-    console.log(`🔍 [DB QUERY] Fetching Accommodation before update: ${req.params.id}`);
+    console.log(`🔍 [DB QUERY] Fetching Accommodation before update: ${numericId}`);
     const fetchStart = Date.now();
-    const before = await Accommodation.findById(req.params.id).lean();
+    const before = await prisma.accommodation.findUnique({
+      where: { id: numericId }
+    });
     console.log(`✅ [DB RESULT] Before-state fetched in ${Date.now() - fetchStart}ms`);
     
     if (!before) return res.status(404).json({ message: 'Not found' });
 
-    console.log(`🔍 [DB QUERY] Updating Accommodation status: ${req.params.id} -> ${normalised}`);
+    // Update nested adminControls object safely
+    const existingAdminControls = before.adminControls || {};
+    const updatedAdminControls = {
+      ...existingAdminControls,
+      isActive
+    };
+
+    console.log(`🔍 [DB QUERY] Updating Accommodation status: ${numericId} -> ${normalised}`);
     const updateStart = Date.now();
-    const doc = await Accommodation.findByIdAndUpdate(
-      req.params.id,
-      { status: normalised, 'adminControls.isActive': isActive },
-      { new: true }
-    );
+    const doc = await prisma.accommodation.update({
+      where: { id: numericId },
+      data: {
+        status: normalised,
+        adminControls: updatedAdminControls
+      }
+    });
     console.log(`✅ [DB RESULT] Accommodation updated in ${Date.now() - updateStart}ms`);
-    
-    if (!doc) return res.status(404).json({ message: 'Not found' });
 
     const wasActive = String(before.status || '').toLowerCase() === 'active';
     if (!wasActive && isActive) {
-      console.log(`🔔 [NOTIFICATION] Notifying activation for listing: ${doc._id}`);
+      console.log(`🔔 [NOTIFICATION] Notifying activation for listing: ${doc.id}`);
       notifyListingActivated({
         module: 'accommodation',
-        entityId: doc._id,
+        entityId: String(doc.id),
         listingTitle: doc.title,
       }).catch(() => {});
     }
 
     console.log(`📤 [RESPONSE] Sending 200 response after ${Date.now() - start}ms`);
-    res.json(doc);
+    res.json(mapAccommodation(doc));
   } catch (e) {
     console.error(`❌ [ERROR] PATCH /accommodation/admin/:id/status failed: ${e.message} after ${Date.now() - start}ms`);
     res.status(500).json({ message: e.message });
@@ -259,30 +250,56 @@ router.patch('/:id/status', async (req, res) => {
 });
 
 // UPDATE
-router.put("/:id", async (req, res) => {
+router.put("/:id", adminCheck, async (req, res) => {
   const start = Date.now();
   console.log(`🚀 [START] PUT /accommodation/admin/:id called with id=${req.params.id} at ${new Date().toISOString()}`);
   try {
-    if (req.user.role !== "admin") {
-      return res.status(403).json({ message: "Admin access required" });
-    }
+    const numericId = parseInt(req.params.id);
+    if (isNaN(numericId)) return res.status(400).json({ message: "Invalid ID format" });
 
-    console.log(`🔍 [DB QUERY] Updating Accommodation with ID: ${req.params.id}`);
+    console.log(`🔍 [DB QUERY] Updating Accommodation with ID: ${numericId}`);
+    
+    // Extract flat helper fields for SQL search/sort performance if they are present in req.body
+    const updateData = {
+      ...req.body
+    };
+
+    // Remove client side MongoDB _id if present to prevent prisma schema validation error
+    delete updateData._id;
+    delete updateData.id;
+
+    if (req.body.rentDetails) {
+      updateData.rent = req.body.rentDetails.coldRent ? parseFloat(req.body.rentDetails.coldRent) : null;
+      updateData.deposit = req.body.rentDetails.deposit ? parseFloat(req.body.rentDetails.deposit) : null;
+    }
+    if (req.body.propertyDetails) {
+      updateData.bedrooms = req.body.propertyDetails.bedrooms ? parseInt(req.body.propertyDetails.bedrooms, 10) : null;
+      updateData.bathrooms = req.body.propertyDetails.bathrooms ? parseInt(req.body.propertyDetails.bathrooms, 10) : null;
+      updateData.area = req.body.propertyDetails.sizeSqm ? parseFloat(req.body.propertyDetails.sizeSqm) : null;
+    }
+    if (req.body.amenities) {
+      updateData.furnished = req.body.amenities.furnished === true;
+      updateData.petsAllowed = req.body.amenities.petsAllowed === true;
+      updateData.parkingAvailable = req.body.amenities.parking === true;
+    }
+    if (req.body.media && Array.isArray(req.body.media.images)) {
+      updateData.image = req.body.media.images.length > 0 ? req.body.media.images[0] : null;
+    }
+    if (req.body.contactPhone) {
+      updateData.phone = String(req.body.contactPhone).trim();
+    }
+    if (req.body.latitude) updateData.latitude = parseFloat(req.body.latitude);
+    if (req.body.longitude) updateData.longitude = parseFloat(req.body.longitude);
+
     const updateStart = Date.now();
-    const updated = await Accommodation.findByIdAndUpdate(
-      req.params.id,
-      req.body,
-      { new: true }
-    );
+    const updated = await prisma.accommodation.update({
+      where: { id: numericId },
+      data: updateData
+    });
     console.log(`✅ [DB RESULT] Accommodation update completed in ${Date.now() - updateStart}ms`);
 
-    if (!updated) {
-      console.log(`📤 [RESPONSE] Sending 404 response after ${Date.now() - start}ms`);
-      return res.status(404).json({ message: "Not found" });
-    }
-
     console.log(`📤 [RESPONSE] Sending 200 response after ${Date.now() - start}ms`);
-    res.status(200).json(updated);
+    res.status(200).json(mapAccommodation(updated));
   } catch (error) {
     console.error(`❌ [ERROR] PUT /accommodation/admin/:id failed: ${error.message} after ${Date.now() - start}ms`);
     res.status(500).json({ message: error.message });
@@ -290,23 +307,19 @@ router.put("/:id", async (req, res) => {
 });
 
 // DELETE
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", adminCheck, async (req, res) => {
   const start = Date.now();
   console.log(`🚀 [START] DELETE /accommodation/admin/:id called with id=${req.params.id} at ${new Date().toISOString()}`);
   try {
-    if (req.user.role !== "admin") {
-      return res.status(403).json({ message: "Admin access required" });
-    }
+    const numericId = parseInt(req.params.id);
+    if (isNaN(numericId)) return res.status(400).json({ message: "Invalid ID format" });
 
-    console.log(`🔍 [DB QUERY] Deleting Accommodation with ID: ${req.params.id}`);
+    console.log(`🔍 [DB QUERY] Deleting Accommodation with ID: ${numericId}`);
     const deleteStart = Date.now();
-    const deleted = await Accommodation.findByIdAndDelete(req.params.id);
+    await prisma.accommodation.delete({
+      where: { id: numericId }
+    });
     console.log(`✅ [DB RESULT] Accommodation delete completed in ${Date.now() - deleteStart}ms`);
-
-    if (!deleted) {
-      console.log(`📤 [RESPONSE] Sending 404 response after ${Date.now() - start}ms`);
-      return res.status(404).json({ message: "Not found" });
-    }
 
     console.log(`📤 [RESPONSE] Sending 200 response after ${Date.now() - start}ms`);
     res.status(200).json({ message: "Deleted successfully" });
